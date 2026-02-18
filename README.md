@@ -1,4 +1,33 @@
-# MaGiBu
+# MaGiBu: Methylation-agnostic Genomic Integration By UMAP
+
+[cite_start]**MaGiBu** (Methylation-agnostic Genomic Integration By UMAP) is a modular framework designed to create and utilize epigenetic decision-support models for CNS tumor classification[cite: 10, 13]. [cite_start]It is a platform-agnostic tool capable of integrating data from **Illumina Methylation Arrays (450k, EPICv1, EPICv2)** and **Oxford Nanopore Technologies (ONT)**[cite: 32, 61, 69].
+
+[cite_start]Instead of delivering a single categorical assignment, MaGiBu calculates the proximity of a query sample to established tumor classes within a "frozen" low-dimensional UMAP reference landscape[cite: 33, 68]. [cite_start]This approach provides a quantitative, ranked differential diagnosis based on the mean Euclidean distance to class representatives[cite: 74, 77].
+
+---
+
+## Tutorial
+
+This tutorial covers the two main phases of the MAGIBU workflow:
+1.  **Reference Model Generation**: Building a stable, annotated epigenetic landscape.
+2.  **Inference & Projection**: Projecting and classifying new prospective samples.
+
+### 1. Building the Reference Model
+
+To perform predictions, you must first establish a reference model. [cite_start]This implementation typically utilizes the reference cohort of **3,905 CNS tumor samples** (GSE109381)[cite: 55]. [cite_start]This dataset defines a label space of **90 CNS DNA methylation classes**[cite: 56]. Clinical annotations are provided in this repository under `CapperAnnotations/samples.clinics.3905.tsv`.
+
+#### Step A: Process Reference IDAT files
+Convert raw methylation data into normalized TSV files. [cite_start]The framework handles background correction and control-probe normalization[cite: 57].
+
+```R
+process_methylation_data(
+  path.to.idat = "path/to/capper_idats", 
+  array.type = "450k", 
+  save.path = "path/to/tsv/reference_samples", 
+  n.cores = 60
+)
+
+
 A modular R framework for stable methylation analysis. MAGIBU projects heterogeneous data (Array/WGBS/Nanopore) onto a pre-computed reference. Features dynamic mapping and quantitative classification based on nearest class representatives to resolve heterogeneity.
 
 
