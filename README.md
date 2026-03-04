@@ -47,7 +47,7 @@ The `save.path` parameter saves the model components for future use. Pre-built m
 
 ## Part 2: Projecting New Samples
 
-### Step 1: Process New Sample IDAT Files
+### Step 1-A: Process New Sample IDAT Files
 
 For this example, we use samples from Mattei et al. (GSE319846):
 ```r
@@ -58,6 +58,27 @@ process_methylation_data(
  n.cores = 60
 )
 ```
+
+### Step 10-B: Process New Sample Nanopore BAM Files
+
+To process Nanopore bam files it is necessary to run modkit with the following command:
+
+```
+REF=hg38.fasta # your fasta reference It must match the one used for the bam alignment.
+THN=10
+modkit extract full --mapped-only --threads ${THN} --cpg --reference ${REF} dorado.output.bam modkit.output.tsv
+```
+
+Then Run the PoreMeth2 script ModkitResorter.sh. 
+You can retrieve ModkitResorter.sh and ParseModkit.pl (required) from [https://github.com/Lab-CoMBINE/PoreMeth2](https://github.com/Lab-CoMBINE/PoreMeth2/tree/master/AdditionalScripts
+
+```
+sh ModkitResorter.sh modkit.output.tsv
+
+mv *sorted.entropy* /path/to/tsv/new_samples
+
+```
+It will generate the TSV files used in the project_new_samples function 
 
 > ⚠️ **Important**: Again, ensure the output directory contains **only** methylation TSV files.
 
