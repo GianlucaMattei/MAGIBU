@@ -74,7 +74,6 @@ You can retrieve ModkitResorter.sh and ParseModkit.pl (required) from [https://g
 
 ```
 sh ModkitResorter.sh modkit.output.tsv
-
 mv *sorted.entropy* /path/to/tsv/new_samples
 
 ```
