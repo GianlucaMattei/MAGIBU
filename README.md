@@ -9,6 +9,13 @@ This tutorial covers:
 1. **Building a reference model** from a training dataset
 2. **Projecting new samples** onto the reference model for classification
 
+## Functions loading
+To load the functions into your R environment, navigate to the directory where you saved the files and run the following command:
+
+```r
+sapply(list.files(), source)
+```
+
 ## Part 1: Building the Reference Model
 
 ### Prerequisites
