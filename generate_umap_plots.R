@@ -480,7 +480,7 @@ plot_global_projection <- function(metadata_input, output_path = NULL, show_labe
 #' @return A ggplot object.
 #' @export
 plot_umap_highlight_specific <- function(metadata_input, target_id, highlight_class, output_path = NULL, 
-                                         zoom = T, target_point_size = 1, highlight_point_size = 0.5,
+                                         zoom = T, target_point_size = 1.3, highlight_point_size = 1.3,
                                          highlight_colors = NULL) {
     
     # --- 1. Load & validate metadata ---
@@ -559,7 +559,7 @@ plot_umap_highlight_specific <- function(metadata_input, target_id, highlight_cl
     my_sizes[target_id] <- target_point_size
     
     # Shape map: background = dot, highlight classes = star, target = filled dot
-    my_shapes <- c("Background" = 16, stats::setNames(rep(8, length(highlight_class)), highlight_class))
+    my_shapes <- c("Background" = 16, stats::setNames(rep(16, length(highlight_class)), highlight_class))
     my_shapes[target_id] <- 16
     
     message("Generating highlight plot for ", length(highlight_class), " class(es)...")
