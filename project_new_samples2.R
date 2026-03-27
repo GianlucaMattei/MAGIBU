@@ -32,7 +32,7 @@ project_new_samples2 <- function(
     name = "projected",
     path.new.tsv = NULL,
     annotation_file = NULL,
-    max_distance = 500L
+    max_distance = 25L
 ) {
  message("=== STARTING PROJECTION OF NEW SAMPLES ===")
 
