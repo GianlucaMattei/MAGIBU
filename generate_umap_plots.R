@@ -462,21 +462,28 @@ plot_global_projection <- function(metadata_input, output_path = NULL, show_labe
 
 #' Plot UMAP Highlight Specific
 #'
-#' Creates a custom plot highlighting a specific target sample and a specific reference class 
-#' while dimming all other samples. Supports zooming.
+#' Creates a custom plot highlighting a target sample and one or more reference classes,
+#' while dimming all other samples. Each highlighted class gets a distinct, consistent color.
+#' Supports zooming to the area of interest.
 #'
-#' @param metadata_input Metadata.
-#' @param target_id Character. ID of the sample to highlight.
-#' @param highlight_class Character. Name of the reference class to highlight.
+#' @param metadata_input Metadata (path or data.frame).
+#' @param target_id Character. ID of the target sample to highlight.
+#' @param highlight_class Character vector. One or more reference class names to highlight.
 #' @param output_path Character. Optional output PDF path.
 #' @param zoom Logical. If TRUE, crops the plot to the relevant area.
-#' @param target_point_size Numeric. Size of the target point.
-#' @param highlight_point_size Numeric. Size of the highlight class points.
+#' @param target_point_size Numeric. Size of the target point. Default 0.5.
+#' @param highlight_point_size Numeric. Size of the highlight class points. Default 0.5.
+#' @param highlight_colors Named character vector. Optional custom colors for highlighted classes.
+#'   Names must match entries in \code{highlight_class}. Classes without a matching entry
+#'   will receive an auto-generated color. Example: \code{c("MB, G4" = "blue", "ETMR" = "red")}.
+#'
 #' @return A ggplot object.
 #' @export
 plot_umap_highlight_specific <- function(metadata_input, target_id, highlight_class, output_path = NULL, 
-                                         zoom = FALSE, target_point_size = 0.5, highlight_point_size = 0.5) {
+                                         zoom = T, target_point_size = 1, highlight_point_size = 0.5,
+                                         highlight_colors = NULL) {
     
+    # --- 1. Load & validate metadata ---
     if (is.character(metadata_input)) {
         if (!file.exists(metadata_input)) stop("File metadata not found.")
         meta <- data.table::fread(metadata_input)
@@ -485,55 +492,95 @@ plot_umap_highlight_specific <- function(metadata_input, target_id, highlight_cl
     }
     
     target.idx <- grep(target_id, meta$Sample_ID_Full)
-    if (length(target.idx) == 0) stop("Target sample not found.")
+    if (length(target.idx) == 0) stop("Target sample not found: '", target_id, "'")
     target_data <- meta[target.idx, ]
     
+    # --- 2. Identify class column ---
     class_cols <- c("methylation_class", "diagnosis", "sample.title", "general_class", "subclass")
     class_col <- intersect(class_cols, names(meta))[1]
     if (is.na(class_col)) stop("No class column found.")
     meta$Ref_Class <- meta[[class_col]]
     
-    meta$PlotGroup <- "Background"
-    meta$PlotGroup[meta$Ref_Class == highlight_class] <- "Highlight_Class"
-    meta$PlotGroup[target.idx] <- "Target"
+    # --- 3. Validate that ALL requested classes exist ---
+    available_classes <- unique(meta$Ref_Class)
+    missing_classes <- setdiff(highlight_class, available_classes)
+    if (length(missing_classes) > 0) {
+        stop("The following classes were not found in the data: ",
+             paste0("'", missing_classes, "'", collapse = ", "),
+             "\nAvailable classes: ", paste0("'", sort(available_classes), "'", collapse = ", "))
+    }
     
-    meta$PlotGroup <- factor(meta$PlotGroup, levels = c("Background", "Highlight_Class", "Target"))
+    # --- 4. Assign PlotGroup: each highlighted class keeps its real name ---
+    meta$PlotGroup <- "Background"
+    for (cls in highlight_class) {
+        meta$PlotGroup[meta$Ref_Class == cls] <- cls
+    }
+    meta$PlotGroup[target.idx] <- target_id   # use sample ID as group label
+    
+    # Factor levels: Background first (drawn first), then classes alphabetically, target last (on top)
+    ordered_levels <- c("Background", sort(highlight_class), target_id)
+    meta$PlotGroup <- factor(meta$PlotGroup, levels = ordered_levels)
     meta <- meta[order(meta$PlotGroup), ]
     
-    my_colors <- c(
-        "Background" = "grey85",
-        "Highlight_Class" = "#F032E6", # Vivid Magenta
-        "Target" = "#D55E00"           # Case 5 Orange
+    # --- 5. Build color palette (consistent across plots) ---
+    # Default palette for highlight classes: distinguishable, deterministic
+    default_class_palette <- c(
+        "#F032E6", "#38b6ff", "#048f6a", "#FF0000", "#005383",
+        "#47006d", "#36f2c0", "#E6194B", "#3CB44B", "#FFE119",
+        "#4363D8", "#F58231", "#911EB4", "#42D4F4", "#BFEF45",
+        "#FABED4", "#469990", "#DCBEFF", "#9A6324", "#800000"
     )
     
-    my_labels <- c("Background" = "Other Reference", "Highlight_Class" = highlight_class, "Target" = target_id)
+    # Build per-class color map
+    class_colors <- character(length(highlight_class))
+    names(class_colors) <- highlight_class
     
-    message("Generating highlight plot...")
+    for (i in seq_along(highlight_class)) {
+        cls <- highlight_class[i]
+        if (!is.null(highlight_colors) && cls %in% names(highlight_colors)) {
+            # User-provided color takes priority
+            class_colors[cls] <- highlight_colors[cls]
+        } else {
+            # Cycle through default palette
+            class_colors[cls] <- default_class_palette[((i - 1) %% length(default_class_palette)) + 1]
+        }
+    }
     
+    # Full palette: Background + classes + target (black dot)
+    my_colors <- c("Background" = "grey85", class_colors)
+    my_colors[target_id] <- "black"
+    
+    # Labels for legend
+    my_labels <- c("Background" = "Other Reference", stats::setNames(highlight_class, highlight_class))
+    my_labels[target_id] <- target_id
+    
+    # Size map
+    my_sizes <- c("Background" = 0.5, stats::setNames(rep(highlight_point_size, length(highlight_class)), highlight_class))
+    my_sizes[target_id] <- target_point_size
+    
+    # Shape map: background = dot, highlight classes = star, target = filled dot
+    my_shapes <- c("Background" = 16, stats::setNames(rep(8, length(highlight_class)), highlight_class))
+    my_shapes[target_id] <- 16
+    
+    message("Generating highlight plot for ", length(highlight_class), " class(es)...")
+    
+    # --- 6. Build plot ---
     p <- ggplot2::ggplot(meta, ggplot2::aes(x = UMAP1, y = UMAP2, color = PlotGroup, size = PlotGroup, shape = PlotGroup)) +
         ggplot2::geom_point(alpha = 0.8) +
         ggplot2::scale_color_manual(values = my_colors, labels = my_labels, name = "Legend") +
-        ggplot2::scale_size_manual(values = c("Background" = 0.5, "Highlight_Class" = highlight_point_size, "Target" = target_point_size), guide = "none") +
-        ggplot2::scale_shape_manual(values = c("Background" = 16, "Highlight_Class" = 8, "Target" = 16), guide = "none") +
-        
-        # Extra circle for target
-        ggplot2::geom_point(data = target_data, ggplot2::aes(x = UMAP1, y = UMAP2), 
-                   color = "black", shape = 21, fill = NA, size = target_point_size, stroke = 0.3, inherit.aes = FALSE) +
-        
-        ggrepel::geom_label_repel(data = target_data, ggplot2::aes(label = Sample_ID_Full),
-                         color = "black", size = 3, fontface = "bold", 
-                         box.padding = 0.5, point.padding = 0.5,
-                         fill = "white", alpha = 0.8,
-                         show.legend = FALSE, inherit.aes = FALSE, x = target_data$UMAP1, y = target_data$UMAP2) +
+        ggplot2::scale_size_manual(values = my_sizes, guide = "none") +
+        ggplot2::scale_shape_manual(values = my_shapes, guide = "none") +
         
         ggplot2::theme_bw() +
         ggplot2::theme(panel.grid = ggplot2::element_blank()) +
         ggplot2::labs(title = paste("Target Placement:", target_id),
-             subtitle = paste("Comparison with", highlight_class),
+             subtitle = paste("Comparison with:", paste(highlight_class, collapse = ", ")),
              x = "UMAP 1", y = "UMAP 2")
     
+    # --- 7. Zoom (tight: 3% margin so classes sit near the edges) ---
     if (zoom) {
-        interest_points <- meta %>% dplyr::filter(PlotGroup %in% c("Target", "Highlight_Class"))
+        highlight_levels <- c(highlight_class, target_id)
+        interest_points <- meta %>% dplyr::filter(PlotGroup %in% highlight_levels)
         if (nrow(interest_points) > 0) {
             min_x <- min(interest_points$UMAP1, na.rm = TRUE); max_x <- max(interest_points$UMAP1, na.rm = TRUE)
             min_y <- min(interest_points$UMAP2, na.rm = TRUE); max_y <- max(interest_points$UMAP2, na.rm = TRUE)
@@ -541,11 +588,11 @@ plot_umap_highlight_specific <- function(metadata_input, target_id, highlight_cl
             span_x <- max_x - min_x; if(span_x == 0) span_x <- 1
             span_y <- max_y - min_y; if(span_y == 0) span_y <- 1
             
-            final_xlim <- c(min_x - (span_x * 0.1), max_x + (span_x * 0.1))
-            final_ylim <- c(min_y - (span_y * 0.1), max_y + (span_y * 0.1))
+            final_xlim <- c(min_x - (span_x * 0.03), max_x + (span_x * 0.03))
+            final_ylim <- c(min_y - (span_y * 0.03), max_y + (span_y * 0.03))
             
             p <- p + ggplot2::coord_fixed(xlim = final_xlim, ylim = final_ylim)
-            message("Zoom applied (+10% margin).")
+            message("Zoom applied (tight, +3% margin).")
         } else {
             p <- p + ggplot2::coord_fixed()
         }
