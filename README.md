@@ -6,6 +6,7 @@
 
 This tutorial covers:
 
+0. **How to install MaGiBu** Spoiler: you don't need  
 1. **Building a reference model** from a training dataset
 2. **Projecting new samples** onto the reference model for classification
 
