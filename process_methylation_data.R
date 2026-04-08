@@ -118,7 +118,14 @@ process_methylation_data <- function(
   } else if (array.type == "Infinium" || array.type == "EpicV1") {
 
     if (is.null(annot.file.path)) {
-      stop("ERROR: 'annot.file.path' is required for array.type 'Infinium' or 'EpicV1'.")
+      # Auto-detect: look in ./Annotations/ relative to working directory
+      default_annot_dir <- file.path(".", "Annotations")
+      annot.file.path <- file.path(default_annot_dir, "epic_v1_manifest_hg38.csv")
+      if (!file.exists(annot.file.path)) {
+        stop("ERROR: 'annot.file.path' not specified and './Annotations/epic_v1_manifest_hg38.csv' not found. ",
+             "Please provide 'annot.file.path' or place the manifest in the Annotations/ folder.")
+      }
+      message("Auto-detected annotation file: ", annot.file.path)
     }
 
     message("Loading external annotation...")
