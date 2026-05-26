@@ -260,7 +260,7 @@ impute_cpg_by_proximity <- function(sample_dt,
     pct         <- round(n_imputed / n_missing * 100, 1)
 
     if (n_imputed > 0) {
-      median_d <- median(imputed$distance)
+      median_d <- as.integer(round(median(imputed$distance)))
       max_d    <- max(imputed$distance)
       message(sprintf(
         "  [proximity] Imputed %d / %d missing CpGs (%.1f%%) within %d bp | median dist: %d bp, max: %d bp",
