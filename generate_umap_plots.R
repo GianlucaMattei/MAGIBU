@@ -1,3 +1,23 @@
+#' Compute a UMAP zoom window (bounding box + margin)
+#'
+#' Internal helper. Given the coordinates of the points of interest, returns the
+#' x/y limits of a bounding box expanded by a fractional buffer on each side.
+#' Shared by \code{plot_global_projection} and \code{plot_umap_highlight_specific}
+#' so the crop logic lives in one place.
+#'
+#' @param x,y Numeric vectors of UMAP coordinates of the points to frame.
+#' @param buffer Numeric. Fraction of each axis span added as margin. Default 0.10.
+#' @return List with \code{xlim} and \code{ylim} numeric length-2 vectors.
+#' @keywords internal
+.umap_zoom_window <- function(x, y, buffer = 0.10) {
+    rx <- range(x, na.rm = TRUE)
+    ry <- range(y, na.rm = TRUE)
+    sx <- diff(rx); if (!is.finite(sx) || sx == 0) sx <- 1
+    sy <- diff(ry); if (!is.finite(sy) || sy == 0) sy <- 1
+    list(xlim = c(rx[1] - sx * buffer, rx[2] + sx * buffer),
+         ylim = c(ry[1] - sy * buffer, ry[2] + sy * buffer))
+}
+
 #' Plot UMAP Zoom (Single Sample)
 #'
 #' Generates a focused UMAP plot for a specific target sample, highlighting its local neighborhood.
@@ -378,54 +398,82 @@ get_top_3_distances <- function(metadata_input, sample_ids = NULL, knn_filter = 
 #' @param metadata_input Character or data.frame. Metadata.
 #' @param output_path Character. Optional path to save PDF.
 #' @param show_labels Logical. Legacy parameter.
+#' @param class_col Character. Optional name of the reference class column to use.
+#'   If NULL (default) it is auto-detected. Useful when the metadata carries the
+#'   class under a non-standard column.
+#' @param numbers_only Logical. If TRUE the new samples are drawn as numbers only
+#'   (no dot underneath), centered on the sample position. Default FALSE.
+#' @param number_size Numeric. Font size of the new-sample numbers. Default 2.5.
+#' @param point_size Numeric. Size of the reference background points. Default 0.8.
+#' @param zoom Logical. If TRUE crop the map to the bounding box of the new samples
+#'   (+ \code{zoom_buffer} margin). Default FALSE.
+#' @param zoom_buffer Numeric. Fractional margin around the new samples when zooming.
+#'   Default 0.15.
+#' @param legend_ncol Integer. Number of legend columns. If set, the legend is shown
+#'   even with many classes (lets you read all classes in a multi-column legend).
+#' @param force_legend Logical. If TRUE keep the legend regardless of class count.
 #' @return A ggplot object.
 #' @export
-plot_global_projection <- function(metadata_input, output_path = NULL, show_labels = TRUE) {
-    
+plot_global_projection <- function(metadata_input, output_path = NULL, show_labels = TRUE,
+                                    class_col = NULL,
+                                    numbers_only = FALSE, number_size = 2.5,
+                                    point_size = 0.8,
+                                    zoom = FALSE, zoom_buffer = 0.15,
+                                    legend_ncol = NULL, force_legend = FALSE) {
+
     if (is.character(metadata_input)) {
         if (!file.exists(metadata_input)) stop("File metadata not found.")
         meta <- data.table::fread(metadata_input)
     } else {
         meta <- as.data.frame(metadata_input)
     }
-    
+
     # Robust splitting
     bg_data <- meta %>% dplyr::filter(is.na(Batch) | Batch != "New_Projected")
     fg_data <- meta %>% dplyr::filter(Batch == "New_Projected")
-    
+
     if (nrow(fg_data) == 0) stop("No new samples (Batch == 'New_Projected') found.")
-    
-    # Class Column
-    class_cols <- c("methylation_class", "diagnosis", "sample.title", "general_class", "subclass")
-    class_col <- intersect(class_cols, names(bg_data))[1]
-    
+
+    # Class Column (explicit override or auto-detect)
+    if (!is.null(class_col)) {
+        if (!class_col %in% names(bg_data)) stop("class_col '", class_col, "' not in metadata.")
+    } else {
+        class_cols <- c("methylation_class", "diagnosis", "sample.title", "general_class", "subclass")
+        class_col <- intersect(class_cols, names(bg_data))[1]
+    }
+
     if (is.na(class_col)) {
         warning("No class column found for reference.")
         bg_data$Ref_Class <- "Reference"
     } else {
         bg_data$Ref_Class <- bg_data[[class_col]]
     }
-    
+    # Drop reference rows without a class label (cannot be colored meaningfully)
+    bg_data <- bg_data[!is.na(bg_data$Ref_Class), ]
+
     fg_data$Plot_Num <- 1:nrow(fg_data)
-    
+
     message("Generating Global Map...")
-    
+
     p <- ggplot2::ggplot() +
         # Layer 1: Background
-        ggplot2::geom_point(data = bg_data, 
-                   ggplot2::aes(x = UMAP1, y = UMAP2, color = Ref_Class), 
-                   size = 0.8, alpha = 0.5) +
-        
-        # Layer 2: Foreground (Dark Grey dots)
-        ggplot2::geom_point(data = fg_data,
+        ggplot2::geom_point(data = bg_data,
+                   ggplot2::aes(x = UMAP1, y = UMAP2, color = Ref_Class),
+                   size = point_size, alpha = 0.5)
+
+    # Layer 2: Foreground dot (skipped in numbers_only mode)
+    if (!numbers_only) {
+        p <- p + ggplot2::geom_point(data = fg_data,
                    ggplot2::aes(x = UMAP1, y = UMAP2),
-                   color = "darkgrey", size = 1) + 
-        
-        # Layer 3: Numbers (Black, above dot)
-        ggplot2::geom_text(data = fg_data,
+                   color = "darkgrey", size = 1)
+    }
+
+    # Layer 3: Numbers (centered if numbers_only, above the dot otherwise)
+    p <- p + ggplot2::geom_text(data = fg_data,
                   ggplot2::aes(x = UMAP1, y = UMAP2, label = Plot_Num),
-                  color = "black", fontface = "bold", size = 2.5, vjust = -1) +
-        
+                  color = "black", fontface = "bold", size = number_size,
+                  vjust = if (numbers_only) 0.5 else -1) +
+
         ggplot2::theme_bw(base_size = 14) +
         ggplot2::theme(
             panel.grid = ggplot2::element_blank(),
@@ -438,14 +486,26 @@ plot_global_projection <- function(metadata_input, output_path = NULL, show_labe
             title = "Global Projection Overview",
             subtitle = paste0("Reference colored by ", class_col, ". New samples numbered 1-", nrow(fg_data)),
             x = "UMAP 1", y = "UMAP 2", color = "Tumor Class"
-        ) +
-        ggplot2::coord_fixed()
-    
-    if (length(unique(bg_data$Ref_Class)) > 40) {
-        message("Too many reference classes. Hiding legend.")
+        )
+
+    # Zoom (crop to new-sample bounding box) via shared helper
+    if (zoom) {
+        w <- .umap_zoom_window(fg_data$UMAP1, fg_data$UMAP2, buffer = zoom_buffer)
+        p <- p + ggplot2::coord_fixed(xlim = w$xlim, ylim = w$ylim, expand = FALSE)
+    } else {
+        p <- p + ggplot2::coord_fixed()
+    }
+
+    # Legend handling: show multi-column when requested/forced, else hide if too many
+    n_classes <- length(unique(bg_data$Ref_Class))
+    if (!is.null(legend_ncol)) {
+        p <- p + ggplot2::guides(color = ggplot2::guide_legend(
+            ncol = legend_ncol, override.aes = list(size = 2.5, alpha = 1)))
+    } else if (n_classes > 40 && !force_legend) {
+        message("Too many reference classes (", n_classes, "). Hiding legend (set legend_ncol or force_legend to keep it).")
         p <- p + ggplot2::theme(legend.position = "none")
     }
-    
+
     if (!is.null(output_path)) {
         ggplot2::ggsave(output_path, p, width = 16, height = 12, limitsize = FALSE)
         message("Plot saved to: ", output_path)
@@ -462,27 +522,70 @@ plot_global_projection <- function(metadata_input, output_path = NULL, show_labe
 
 #' Plot UMAP Highlight Specific
 #'
-#' Creates a custom plot highlighting a target sample and one or more reference classes,
-#' while dimming all other samples. Each highlighted class gets a distinct, consistent color.
-#' Supports zooming to the area of interest.
+#' Creates a custom plot highlighting one or more target samples and one or more
+#' reference classes, while dimming all other samples. Each highlighted class and
+#' each target sample gets a distinct, consistent color. Target sample IDs are
+#' annotated directly on the plot via \code{ggrepel}. Supports zooming to the
+#' area of interest.
 #'
 #' @param metadata_input Metadata (path or data.frame).
-#' @param target_id Character. ID of the target sample to highlight.
+#' @param target_ids Character vector. One or more sample IDs to highlight as targets.
+#'   Each receives a distinct color and is labelled on the plot.
 #' @param highlight_class Character vector. One or more reference class names to highlight.
+#'   Optional (default NULL): with \code{background = "color"} you can omit it to simply
+#'   color every reference class.
 #' @param output_path Character. Optional output PDF path.
-#' @param zoom Logical. If TRUE, crops the plot to the relevant area.
-#' @param target_point_size Numeric. Size of the target point. Default 0.5.
-#' @param highlight_point_size Numeric. Size of the highlight class points. Default 0.5.
-#' @param highlight_colors Named character vector. Optional custom colors for highlighted classes.
-#'   Names must match entries in \code{highlight_class}. Classes without a matching entry
-#'   will receive an auto-generated color. Example: \code{c("MB, G4" = "blue", "ETMR" = "red")}.
+#' @param zoom Logical. If TRUE, crops the plot to the relevant area. Default TRUE.
+#' @param zoom_buffer Numeric. Fractional margin around the points of interest when
+#'   zooming. Default 0.03.
+#' @param background Character. \code{"grey"} (default) dims all non-highlighted
+#'   references to grey; \code{"color"} colors every reference class with its own color
+#'   (useful to see where targets land across the whole map).
+#' @param target_label Character. How to annotate targets: \code{"id"} (default, shortened
+#'   sample IDs via ggrepel, requires \code{show_target_labels = TRUE}), \code{"number"}
+#'   (sequential numbers 1..N in the order of \code{target_ids}), or \code{"none"}.
+#' @param target_as_point Logical. If FALSE the target marker is omitted (useful with
+#'   \code{target_label = "number"} to show numbers only). Default TRUE.
+#' @param number_size Numeric. Font size of the target numbers. Default 2.5.
+#' @param legend_ncol Integer. Number of legend columns; set it to keep a readable
+#'   legend when coloring many classes. Default NULL.
+#' @param target_point_size Numeric. Size of the target points. Default 2.
+#' @param highlight_point_size Numeric. Size of the highlight class points. Default 1.3.
+#' @param highlight_colors Named character vector. Optional custom colors for highlighted
+#'   classes. Names must match entries in \code{highlight_class}. Classes without a
+#'   matching entry will receive an auto-generated color.
+#'   Example: \code{c("MB, G4" = "blue", "ETMR" = "red")}.
+#' @param target_colors Named character vector. Optional custom colors for target samples.
+#'   Names must match entries in \code{target_ids}. Samples without a matching entry
+#'   will receive an auto-generated color.
+#' @param show_target_labels Logical. If TRUE, draws sample ID labels on target points
+#'   via \code{ggrepel}. Default TRUE.
+#' @param label_size Numeric. Font size for ggrepel labels. Default 3.5.
 #'
 #' @return A ggplot object.
 #' @export
-plot_umap_highlight_specific <- function(metadata_input, target_id, highlight_class, output_path = NULL, 
-                                         zoom = T, target_point_size = 1.3, highlight_point_size = 1.3,
-                                         highlight_colors = NULL) {
-    
+plot_umap_highlight_specific <- function(metadata_input,
+                                         target_ids,
+                                         highlight_class      = NULL,
+                                         output_path          = NULL,
+                                         zoom                 = TRUE,
+                                         zoom_buffer          = 0.03,
+                                         background           = "grey",
+                                         target_label         = "id",
+                                         target_as_point      = TRUE,
+                                         number_size          = 2.5,
+                                         legend_ncol          = NULL,
+                                         target_point_size    = 2,
+                                         highlight_point_size = 1.3,
+                                         highlight_colors     = NULL,
+                                         target_colors        = NULL,
+                                         show_target_labels   = FALSE,
+                                         label_size           = 3.5) {
+
+    background   <- match.arg(background, c("grey", "color"))
+    target_label <- match.arg(target_label, c("id", "number", "none"))
+    if (is.null(highlight_class)) highlight_class <- character(0)
+
     # --- 1. Load & validate metadata ---
     if (is.character(metadata_input)) {
         if (!file.exists(metadata_input)) stop("File metadata not found.")
@@ -490,121 +593,270 @@ plot_umap_highlight_specific <- function(metadata_input, target_id, highlight_cl
     } else {
         meta <- as.data.frame(metadata_input)
     }
-    
-    target.idx <- grep(target_id, meta$Sample_ID_Full)
-    if (length(target.idx) == 0) stop("Target sample not found: '", target_id, "'")
-    target_data <- meta[target.idx, ]
-    
+
+    # Normalise target_ids to a plain character vector
+    target_ids <- as.character(target_ids)
+    if (length(target_ids) == 0) stop("'target_ids' must contain at least one sample ID.")
+
+    # Resolve every target_id: find rows via grep, keep first hit per ID
+    target_idx_list <- lapply(target_ids, function(tid) {
+        idx <- grep(tid, meta$Sample_ID_Full)
+        if (length(idx) == 0) stop("Target sample not found: '", tid, "'")
+        idx[1]
+    })
+    all_target_rows <- unique(unlist(target_idx_list))
+
     # --- 2. Identify class column ---
     class_cols <- c("methylation_class", "diagnosis", "sample.title", "general_class", "subclass")
-    class_col <- intersect(class_cols, names(meta))[1]
+    class_col  <- intersect(class_cols, names(meta))[1]
     if (is.na(class_col)) stop("No class column found.")
     meta$Ref_Class <- meta[[class_col]]
-    
-    # --- 3. Validate that ALL requested classes exist ---
+
+    # --- 3. Expand highlight_class: resolve subclasses ---
+    # If an entry matches exactly -> keep it.
+    # If not found exactly -> find all classes starting with "NAME, " (prefix + ", ").
+    # This avoids false positives from plain grep (e.g. "ATRT" must not match "ATRTTTRAS").
     available_classes <- unique(meta$Ref_Class)
-    missing_classes <- setdiff(highlight_class, available_classes)
-    if (length(missing_classes) > 0) {
-        stop("The following classes were not found in the data: ",
-             paste0("'", missing_classes, "'", collapse = ", "),
-             "\nAvailable classes: ", paste0("'", sort(available_classes), "'", collapse = ", "))
-    }
-    
-    # --- 4. Assign PlotGroup: each highlighted class keeps its real name ---
-    meta$PlotGroup <- "Background"
+
+    expanded_classes <- character(0)
     for (cls in highlight_class) {
-        meta$PlotGroup[meta$Ref_Class == cls] <- cls
+        if (cls %in% available_classes) {
+            expanded_classes <- c(expanded_classes, cls)
+        } else {
+            # Escape any regex metacharacters in the class name, then anchor prefix + ", "
+            esc     <- gsub("([.\\^$*+?|(){}\\[\\]])", "\\\\1", cls, perl = TRUE)
+            pattern <- paste0("^", esc, "(,\\s|$)")
+            subs    <- grep(pattern, available_classes, value = TRUE, perl = TRUE)
+            if (length(subs) > 0) {
+                message("'", cls, "' not found exactly. Expanding to: ", paste(subs, collapse = ", "))
+                expanded_classes <- c(expanded_classes, subs)
+            } else {
+                stop("Class '", cls, "' not found (neither exact match nor as class prefix).\n",
+                     "Available classes: ", paste0("'", sort(available_classes), "'", collapse = ", "))
+            }
+        }
     }
-    meta$PlotGroup[target.idx] <- target_id   # use sample ID as group label
-    
-    # Factor levels: Background first (drawn first), then classes alphabetically, target last (on top)
-    ordered_levels <- c("Background", sort(highlight_class), target_id)
+    highlight_class <- unique(expanded_classes)
+
+    # --- 4. Assign PlotGroup ---
+    # Priority (highest first): target sample > highlighted class > background.
+    # background == "grey":  non-highlighted refs collapse into one grey "Background" group.
+    # background == "color": every reference class keeps its own group (all colored).
+    if (background == "color") {
+        meta$PlotGroup <- as.character(meta$Ref_Class)
+        # refs without a class label become grey background
+        meta$PlotGroup[is.na(meta$Ref_Class)] <- "Background"
+        bg_class_levels <- sort(unique(meta$Ref_Class[!is.na(meta$Ref_Class)]))
+    } else {
+        meta$PlotGroup <- "Background"
+        for (cls in highlight_class) {
+            meta$PlotGroup[meta$Ref_Class == cls] <- cls
+        }
+        bg_class_levels <- sort(highlight_class)
+    }
+
+    # Each target gets its own group label (its resolved Sample_ID_Full)
+    # Use the actual ID found in the data (may differ slightly from the query string)
+    resolved_target_ids <- meta$Sample_ID_Full[all_target_rows]
+    for (k in seq_along(target_idx_list)) {
+        row_k      <- target_idx_list[[k]]
+        resolved_k <- meta$Sample_ID_Full[row_k]
+        meta$PlotGroup[row_k] <- resolved_k
+    }
+
+    # Numbering of targets (order of resolved_target_ids = order of target_ids)
+    target_num <- stats::setNames(seq_along(resolved_target_ids), resolved_target_ids)
+
+    # Factor levels: Background first, classes alpha-sorted, targets last (on top)
+    ordered_levels <- c("Background", bg_class_levels, resolved_target_ids)
+    ordered_levels <- ordered_levels[!duplicated(ordered_levels)]
     meta$PlotGroup <- factor(meta$PlotGroup, levels = ordered_levels)
-    meta <- meta[order(meta$PlotGroup), ]
-    
-    # --- 5. Build color palette (consistent across plots) ---
-    # Default palette for highlight classes: distinguishable, deterministic
+    meta           <- meta[order(meta$PlotGroup), ]
+
+    # --- 5. Build color palette ---
+
+    # Default palette for highlight classes
     default_class_palette <- c(
         "#F032E6", "#38b6ff", "#048f6a", "#FF0000", "#005383",
         "#47006d", "#36f2c0", "#E6194B", "#3CB44B", "#FFE119",
         "#4363D8", "#F58231", "#911EB4", "#42D4F4", "#BFEF45",
         "#FABED4", "#469990", "#DCBEFF", "#9A6324", "#800000"
     )
-    
-    # Build per-class color map
+
+    # Default palette for target samples (bold, warm tones to stand out from classes)
+    default_target_palette <- c(
+        "#000000", "#D55E00", "#E69F00", "#56B4E9", "#009E73",
+        "#CC79A7", "#0072B2", "#F0E442", "#8B0000", "#2E8B57"
+    )
+
+    # Per-class colors
     class_colors <- character(length(highlight_class))
     names(class_colors) <- highlight_class
-    
     for (i in seq_along(highlight_class)) {
         cls <- highlight_class[i]
         if (!is.null(highlight_colors) && cls %in% names(highlight_colors)) {
-            # User-provided color takes priority
             class_colors[cls] <- highlight_colors[cls]
         } else {
-            # Cycle through default palette
             class_colors[cls] <- default_class_palette[((i - 1) %% length(default_class_palette)) + 1]
         }
     }
-    
-    # Full palette: Background + classes + target (black dot)
-    my_colors <- c("Background" = "grey85", class_colors)
-    my_colors[target_id] <- "black"
-    
-    # Labels for legend
-    my_labels <- c("Background" = "Other Reference", stats::setNames(highlight_class, highlight_class))
-    my_labels[target_id] <- target_id
-    
-    # Size map
-    my_sizes <- c("Background" = 0.5, stats::setNames(rep(highlight_point_size, length(highlight_class)), highlight_class))
-    my_sizes[target_id] <- target_point_size
-    
-    # Shape map: background = dot, highlight classes = star, target = filled dot
-    my_shapes <- c("Background" = 16, stats::setNames(rep(16, length(highlight_class)), highlight_class))
-    my_shapes[target_id] <- 16
-    
-    message("Generating highlight plot for ", length(highlight_class), " class(es)...")
-    
-    # --- 6. Build plot ---
-    p <- ggplot2::ggplot(meta, ggplot2::aes(x = UMAP1, y = UMAP2, color = PlotGroup, size = PlotGroup, shape = PlotGroup)) +
+
+    # Per-target colors
+    tgt_colors <- character(length(resolved_target_ids))
+    names(tgt_colors) <- resolved_target_ids
+    for (i in seq_along(resolved_target_ids)) {
+        tid <- resolved_target_ids[i]
+        # Check user-provided colors both by resolved and original query ID
+        user_key <- names(target_colors)[match(TRUE, vapply(names(target_colors),
+                                                             function(k) grepl(k, tid, fixed = TRUE),
+                                                             logical(1)))]
+        if (!is.null(target_colors) && !is.na(user_key)) {
+            tgt_colors[tid] <- target_colors[user_key]
+        } else {
+            tgt_colors[tid] <- default_target_palette[((i - 1) %% length(default_target_palette)) + 1]
+        }
+    }
+
+    # Legend labels: shorten long target IDs to last 2 underscore-delimited tokens
+    shorten_id <- function(x) {
+        parts <- strsplit(x, "_")[[1]]
+        if (length(parts) > 2) paste(tail(parts, 2), collapse = "_") else x
+    }
+    # Target legend labels: numbers or shortened IDs
+    if (target_label == "number") {
+        tgt_labels <- stats::setNames(as.character(target_num[resolved_target_ids]), resolved_target_ids)
+    } else {
+        tgt_labels <- stats::setNames(sapply(resolved_target_ids, shorten_id), resolved_target_ids)
+    }
+
+    # Target marker: diamond if drawn as point, blank (pch 32) if numbers-only
+    tgt_shape <- if (target_as_point) 18 else 32
+
+    if (background == "color") {
+        # Colors for ALL reference classes; highlight_class entries overridden by class_colors
+        qual <- unique(c(
+            RColorBrewer::brewer.pal(9, "Set1"),   RColorBrewer::brewer.pal(8, "Dark2"),
+            RColorBrewer::brewer.pal(12, "Paired"), RColorBrewer::brewer.pal(12, "Set3"),
+            RColorBrewer::brewer.pal(8, "Set2"),    RColorBrewer::brewer.pal(8, "Accent"),
+            RColorBrewer::brewer.pal(9, "Pastel1")))
+        nb     <- length(bg_class_levels)
+        bg_pal <- if (nb > length(qual)) grDevices::colorRampPalette(qual)(nb) else qual[seq_len(nb)]
+        names(bg_pal) <- bg_class_levels
+        if (length(class_colors) > 0) bg_pal[names(class_colors)] <- class_colors
+
+        my_colors <- c("Background" = "grey85", bg_pal, tgt_colors)
+        my_labels <- c("Background" = "Unlabeled",
+                       stats::setNames(bg_class_levels, bg_class_levels),
+                       tgt_labels)
+        bg_sizes <- stats::setNames(rep(0.7, nb), bg_class_levels)
+        if (length(highlight_class) > 0) bg_sizes[highlight_class] <- highlight_point_size
+        my_sizes <- c("Background" = 0.5, bg_sizes,
+                      stats::setNames(rep(target_point_size, length(resolved_target_ids)), resolved_target_ids))
+        my_shapes <- c("Background" = 16,
+                       stats::setNames(rep(16, nb), bg_class_levels),
+                       stats::setNames(rep(tgt_shape, length(resolved_target_ids)), resolved_target_ids))
+    } else {
+        my_colors <- c("Background" = "grey85", class_colors, tgt_colors)
+        my_labels <- c("Background" = "Other Reference",
+                       stats::setNames(highlight_class, highlight_class),
+                       tgt_labels)
+        my_sizes  <- c("Background" = 0.4,
+                       stats::setNames(rep(highlight_point_size, length(highlight_class)), highlight_class),
+                       stats::setNames(rep(target_point_size,    length(resolved_target_ids)), resolved_target_ids))
+        my_shapes <- c("Background" = 16,
+                       stats::setNames(rep(16, length(highlight_class)), highlight_class),
+                       stats::setNames(rep(tgt_shape, length(resolved_target_ids)), resolved_target_ids))
+    }
+
+    message("Generating highlight plot: ", length(resolved_target_ids), " target(s), ",
+            length(highlight_class), " class(es).")
+
+    # --- 6. Build base plot ---
+    # In numbers-only mode drop the (numerous) target entries from the color legend;
+    # the numbers on the plot already identify them.
+    legend_breaks <- if (target_label == "number")
+                         setdiff(names(my_colors), resolved_target_ids) else names(my_colors)
+    legend_labels <- my_labels[legend_breaks]
+
+    p <- ggplot2::ggplot(meta,
+                         ggplot2::aes(x = UMAP1, y = UMAP2,
+                                      color = PlotGroup,
+                                      size  = PlotGroup,
+                                      shape = PlotGroup)) +
         ggplot2::geom_point(alpha = 0.8) +
-        ggplot2::scale_color_manual(values = my_colors, labels = my_labels, name = "Legend") +
-        ggplot2::scale_size_manual(values = my_sizes, guide = "none") +
-        ggplot2::scale_shape_manual(values = my_shapes, guide = "none") +
-        
+        ggplot2::scale_color_manual(values = my_colors, labels = legend_labels,
+                                    name = "Legend", breaks = legend_breaks) +
+        ggplot2::scale_size_manual(values  = my_sizes,  guide  = "none") +
+        ggplot2::scale_shape_manual(values = my_shapes, guide  = "none") +
         ggplot2::theme_bw() +
         ggplot2::theme(panel.grid = ggplot2::element_blank()) +
-        ggplot2::labs(title = paste("Target Placement:", target_id),
-             subtitle = paste("Comparison with:", paste(highlight_class, collapse = ", ")),
-             x = "UMAP 1", y = "UMAP 2")
-    
-    # --- 7. Zoom (tight: 3% margin so classes sit near the edges) ---
+        ggplot2::labs(
+            title    = paste("Target Placement:",
+                             paste(sapply(resolved_target_ids, shorten_id), collapse = ", ")),
+            subtitle = if (length(highlight_class) > 0)
+                           paste("Comparison with:", paste(highlight_class, collapse = ", "))
+                       else if (background == "color")
+                           paste0("Reference colored by class (", length(bg_class_levels), " classes)")
+                       else NULL,
+            x = "UMAP 1", y = "UMAP 2"
+        )
+
+    # Legend: multi-column when requested (needed when coloring many classes)
+    if (!is.null(legend_ncol)) {
+        p <- p + ggplot2::guides(color = ggplot2::guide_legend(
+                     ncol = legend_ncol, override.aes = list(size = 2.5, alpha = 1))) +
+                 ggplot2::theme(legend.text = ggplot2::element_text(size = 6),
+                                legend.title = ggplot2::element_text(size = 9, face = "bold"),
+                                legend.key.size = ggplot2::unit(0.4, "cm"))
+    }
+
+    # --- 7. Target annotations: numbers, ggrepel IDs, or none ---
+    target_pts <- meta[meta$PlotGroup %in% resolved_target_ids, ]
+    if (target_label == "number") {
+        target_pts$Label <- as.character(target_num[as.character(target_pts$PlotGroup)])
+        p <- p + ggplot2::geom_text(
+            data        = target_pts,
+            ggplot2::aes(x = UMAP1, y = UMAP2, label = Label),
+            color       = "black", fontface = "bold", size = number_size,
+            show.legend = FALSE, inherit.aes = FALSE)
+    } else if (target_label == "id" && show_target_labels &&
+               requireNamespace("ggrepel", quietly = TRUE)) {
+        target_pts$Label <- sapply(as.character(target_pts$PlotGroup), shorten_id)
+        p <- p + ggrepel::geom_text_repel(
+            data               = target_pts,
+            ggplot2::aes(x = UMAP1, y = UMAP2, label = Label),
+            size               = label_size,
+            fontface           = "bold",
+            box.padding        = 0.4,
+            point.padding      = 0.3,
+            min.segment.length = 0,
+            show.legend        = FALSE,
+            inherit.aes        = FALSE
+        )
+    }
+
+    # --- 8. Zoom (shared bounding-box helper) ---
     if (zoom) {
-        highlight_levels <- c(highlight_class, target_id)
-        interest_points <- meta %>% dplyr::filter(PlotGroup %in% highlight_levels)
+        highlight_levels <- if (length(highlight_class) > 0)
+                                c(highlight_class, resolved_target_ids) else resolved_target_ids
+        interest_points  <- meta[meta$PlotGroup %in% highlight_levels, ]
         if (nrow(interest_points) > 0) {
-            min_x <- min(interest_points$UMAP1, na.rm = TRUE); max_x <- max(interest_points$UMAP1, na.rm = TRUE)
-            min_y <- min(interest_points$UMAP2, na.rm = TRUE); max_y <- max(interest_points$UMAP2, na.rm = TRUE)
-            
-            span_x <- max_x - min_x; if(span_x == 0) span_x <- 1
-            span_y <- max_y - min_y; if(span_y == 0) span_y <- 1
-            
-            final_xlim <- c(min_x - (span_x * 0.03), max_x + (span_x * 0.03))
-            final_ylim <- c(min_y - (span_y * 0.03), max_y + (span_y * 0.03))
-            
-            p <- p + ggplot2::coord_fixed(xlim = final_xlim, ylim = final_ylim)
-            message("Zoom applied (tight, +3% margin).")
+            w <- .umap_zoom_window(interest_points$UMAP1, interest_points$UMAP2, buffer = zoom_buffer)
+            p <- p + ggplot2::coord_fixed(xlim = w$xlim, ylim = w$ylim, expand = FALSE)
+            message("Zoom applied (+", round(zoom_buffer * 100), "% margin).")
         } else {
             p <- p + ggplot2::coord_fixed()
         }
     } else {
         p <- p + ggplot2::coord_fixed()
     }
-    
+
+    # --- 9. Save ---
     if (!is.null(output_path)) {
         ggplot2::ggsave(output_path, p, width = 10, height = 8)
         message("Highlight plot saved: ", output_path)
     }
-    
+
     return(p)
 }
 
