@@ -13,6 +13,9 @@ Classify your samples in a few clicks. The red numbers in each picture match the
 
 For every option, see the [full tutorial](TUTORIAL.md). **Research use only.**
 
+> **Download:** [Magibu for Windows (zip, 650 MB)](https://github.com/GianlucaMattei/MAGIBU/releases/download/v0.7.0-app/Magibu-0.7.0-win.zip).
+> Unzip it in any folder and double click **Magibu.exe**. No installation needed.
+
 ---
 
 ## Step 1 · Select the model
