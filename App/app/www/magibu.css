@@ -1,0 +1,20 @@
+.mg-path { position: relative; margin-bottom: .6rem; }
+.mg-path .form-group { margin-bottom: .25rem; }
+.mg-path .mg-browse { float: right; }
+.mg-path::after { content: ""; display: block; clear: both; }
+.mg-toolbar { display: flex; gap: .5rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: .6rem; }
+.mg-toolbar .form-group { margin-bottom: 0; }
+.mg-status { margin-bottom: .6rem; padding: .5rem .8rem; }
+.sidebar h5 { margin-top: .4rem; font-size: 1rem; font-weight: 700; }
+pre.shiny-text-output { max-height: 620px; overflow: auto; font-size: .78rem; white-space: pre-wrap; }
+body.mg-browser .mg-browse, body.mg-browser .mg-open { display: none; }
+.mg-flags { display: flex; gap: .35rem; align-items: center; padding: 0 .5rem; }
+.mg-flag { border: 2px solid transparent; background: none; padding: 1px; border-radius: 3px; line-height: 0; cursor: pointer; opacity: .65; }
+.mg-flag img { width: 27px; height: 18px; display: block; box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+.mg-flag:hover { opacity: 1; }
+.mg-flag.active { opacity: 1; border-color: #fff; }
+.mg-help { font-size: .85rem; color: #555; background: #f4f6f8; border-radius: 4px; padding: .5rem .7rem; margin-bottom: .6rem; }
+.mg-help p { margin: 0 0 .2rem 0; }
+table.mg-names td { vertical-align: middle; }
+table.mg-names .form-group { margin-bottom: 0; }
+:lang(zh-CN) body { font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif; }

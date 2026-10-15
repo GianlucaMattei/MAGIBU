@@ -1,0 +1,15 @@
+dist/
+electron/node_modules/
+rlib-server/
+build/*.log
+build/native/src/
+build/native/dl/
+build/native/htslib-*/
+build/native/win/
+build/native/out/
+build/win/R-extract/
+build/win/zips/
+build/win/innoextract*
+build/win/R-*-win.exe
+build/R-portable/
+build/R-*-win.exe

@@ -1,0 +1,13 @@
+{
+  "appId": "org.magibu.app",
+  "productName": "Magibu",
+  "directories": { "output": "../dist" },
+  "files": ["main.js", "preload.js", "splash.html"],
+  "extraResources": [
+    { "from": "../app", "to": "app" },
+    { "from": "../models", "to": "models" },
+    { "from": "../build/win/R-extract/app", "to": "R" },
+    { "from": "../build/THIRD_PARTY_LICENSES.txt", "to": "THIRD_PARTY_LICENSES.txt" }
+  ],
+  "win": { "target": [{ "target": "zip", "arch": ["x64"] }], "signAndEditExecutable": false }
+}

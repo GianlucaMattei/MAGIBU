@@ -1,0 +1,30 @@
+{
+  "name": "magibu",
+  "version": "0.7.0",
+  "description": "Magibu - DNA methylation classifier (research use only)",
+  "main": "main.js",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis",
+    "dist:linux": "electron-builder --linux AppImage"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "org.magibu.app",
+    "productName": "Magibu",
+    "directories": { "output": "../dist" },
+    "files": ["main.js", "preload.js", "splash.html"],
+    "extraResources": [
+      { "from": "../app", "to": "app" },
+      { "from": "../models", "to": "models" },
+      { "from": "../build/R-portable", "to": "R" },
+      { "from": "../build/THIRD_PARTY_LICENSES.txt", "to": "THIRD_PARTY_LICENSES.txt" }
+    ],
+    "win": { "target": "nsis" },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true }
+  }
+}
