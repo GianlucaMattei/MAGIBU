@@ -2,7 +2,7 @@
 
 **MaGiBu** (Methylation-based Guided Builder) is a modular R framework for building methylation-based classification models. It is platform-agnostic, supporting both Illumina methylation arrays (450K, EPIC, EPICv2) and Oxford Nanopore sequencing data.
 
-## Magibu App (desktop program, no R needed)
+## Magibu App for Windows
 
 <p align="center">
   <a href="App/docs/EXPRESS_TUTORIAL.md"><img alt="Express tutorial" height="56" src="https://img.shields.io/badge/EXPRESS%20TUTORIAL-6%20steps-0f6e8c?style=for-the-badge"></a>
