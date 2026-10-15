@@ -5,12 +5,16 @@
 ## Magibu App for Windows
 
 <p align="center">
+  <a href="https://github.com/GianlucaMattei/MAGIBU/releases/download/v0.7.0-app/Magibu-0.7.0-win.zip"><img alt="Download for Windows" height="64" src="https://img.shields.io/badge/DOWNLOAD%20FOR%20WINDOWS-v0.7.0-d73a49?style=for-the-badge"></a>
+</p>
+
+<p align="center">
   <a href="App/docs/EXPRESS_TUTORIAL.md"><img alt="Express tutorial" height="56" src="https://img.shields.io/badge/EXPRESS%20TUTORIAL-6%20steps-0f6e8c?style=for-the-badge"></a>
   &nbsp;&nbsp;
   <a href="App/docs/TUTORIAL.md"><img alt="Full tutorial" height="56" src="https://img.shields.io/badge/FULL%20TUTORIAL-all%20options-1f6f7c?style=for-the-badge"></a>
 </p>
 
-<p align="center"><b><a href="App/docs/EXPRESS_TUTORIAL.md">Express tutorial</a></b>: classify samples in 6 steps &nbsp;|&nbsp; <b><a href="App/docs/TUTORIAL.md">Full tutorial</a></b>: every option, including building a model</p>
+<p align="center">Download, unzip and double click <b>Magibu.exe</b> (no installation needed) &nbsp;|&nbsp; <b><a href="App/docs/EXPRESS_TUTORIAL.md">Express tutorial</a></b>: classify samples in 6 steps &nbsp;|&nbsp; <b><a href="App/docs/TUTORIAL.md">Full tutorial</a></b>: every option &nbsp;|&nbsp; <a href="https://github.com/GianlucaMattei/MAGIBU/releases">All versions</a></p>
 
 The Magibu App is a Windows program with a graphical interface: Illumina arrays and nanopore BAM files are classified
 with a few clicks. Details in [App/README.md](App/README.md).
