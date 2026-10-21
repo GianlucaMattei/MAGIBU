@@ -36,7 +36,7 @@
 #' \code{IlluminaHumanMethylationEPICv2anno.20a1.hg38} annotation package.
 #' Processes samples in batches of 10.
 #'
-#' \strong{Infinium / EpicV1}: Uses \code{minfi::preprocessIllumina} with
+#' \strong{Infinium / EpicV1}: Uses \code{minfi::preprocessRaw} (formerly preprocessIllumina) with
 #' background correction and control normalisation. Requires an external
 #' annotation file via \code{annot.file.path}.
 #'
@@ -305,8 +305,9 @@ process_methylation_data <- function(
 .process_batch_infinium_legacy <- function(batch.targets, annot.external) {
   rgSet <- minfi::read.metharray.exp(targets = batch.targets,
                                      force = TRUE)
-  mSet <- minfi::preprocessIllumina(rgSet, bg.correct = TRUE,
-                                    normalize = "controls")
+  # preprocessRaw, as EPICv2: preprocessIllumina stops on matrixStats::colMeans2 (useNames = NA)
+  # with matrixStats >= 1.0, and raw betas keep 450k/EPICv1 consistent with the other platforms
+  mSet <- minfi::preprocessRaw(rgSet)
   beta_values <- minfi::getBeta(mSet)
 
   dt_list <- list()

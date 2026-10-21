@@ -128,21 +128,68 @@ generate_umap_training_model <- function(tsv.path,
                 "Nanopore projection will NOT work without external annotation.")
     }
     
-    # --- Strip position columns before merge (keep only Probe_ID + beta) ---
-    data_list_clean <- lapply(data_list, function(dt) {
-        cols_to_drop <- intersect(c("chr_hg38", "pos_hg38"), names(dt))
-        if (length(cols_to_drop) > 0) dt[, (cols_to_drop) := NULL]
-        return(dt)
-    })
+    all_pos <- all(vapply(data_list, function(dt) all(c("chr_hg38", "pos_hg38") %in% names(dt)), logical(1)))
+    if (all_pos) {
+        # Join by genomic position (+-1 bp, as in project_new_samples), not by probe name:
+        # 450k / EPICv1 / EPICv2 (cg..._TC21) / matrix-derived TSVs align even with different probe
+        # names or coordinates on the opposite strand. Reference = CpGs with coordinates of the first
+        # file; rows keep its Probe_ID, so selected_cpgs / probe_to_position work as before.
+        ref <- data_list[[1]][!is.na(chr_hg38) & !is.na(pos_hg38) & chr_hg38 != "",
+                              .(Probe_ID, chr_hg38, pos_hg38 = as.integer(pos_hg38))]
+        ref <- ref[!duplicated(Probe_ID)][!duplicated(paste0(chr_hg38, ":", pos_hg38))]
+        k0 <- paste0(ref$chr_hg38, ":", ref$pos_hg38)
+        kp <- paste0(ref$chr_hg38, ":", ref$pos_hg38 + 1L)
+        km <- paste0(ref$chr_hg38, ":", ref$pos_hg38 - 1L)
+        message(paste("Joining by position (+-1 bp) on", length(k0), "reference CpGs..."))
+        # each sample -> beta vector aligned to the reference (NaN = CpG absent, NA = missing beta)
+        aligned <- lapply(data_list, function(dt) {
+            x <- dt[!is.na(chr_hg38) & !is.na(pos_hg38)]
+            k <- paste0(x$chr_hg38, ":", as.integer(x$pos_hg38)); keep <- !duplicated(k)
+            bcol <- setdiff(names(x), c("Probe_ID", "chr_hg38", "pos_hg38"))[1]
+            k <- k[keep]; b <- as.numeric(x[[bcol]][keep]); b[is.nan(b)] <- NA_real_
+            i <- match(k0, k); j <- is.na(i)
+            i[j] <- match(kp[j], k); j <- is.na(i)
+            i[j] <- match(km[j], k)
+            v <- rep(NaN, length(k0)); ok <- !is.na(i); v[ok] <- b[i[ok]]
+            v
+        })
+        sample_names <- vapply(data_list, function(dt) setdiff(names(dt), c("Probe_ID", "chr_hg38", "pos_hg38"))[1], character(1))
+        rm(data_list); gc()
+        # Inner join: only CpGs shared across ALL samples survive (rows sorted by Probe_ID, as merge)
+        present <- Reduce(`&`, lapply(aligned, function(v) !is.nan(v)))
+        o <- which(present); o <- o[order(ref$Probe_ID[o], method = "radix")]
+        beta_matrix <- matrix(NA_real_, length(o), length(aligned),
+                              dimnames = list(ref$Probe_ID[o], sample_names))
+        for (j in seq_along(aligned)) { beta_matrix[, j] <- aligned[[j]][o]; aligned[j] <- list(NULL) }
+        rm(aligned)
+    } else {
+        warning("Some training TSVs have no position columns: joining by Probe_ID ",
+                "(probes with different names across platforms, e.g. EPICv2, are lost).")
+        # --- Strip position columns before merge (keep only Probe_ID + beta) ---
+        data_list_clean <- lapply(data_list, function(dt) {
+            cols_to_drop <- intersect(c("chr_hg38", "pos_hg38"), names(dt))
+            if (length(cols_to_drop) > 0) dt[, (cols_to_drop) := NULL]
+            return(dt)
+        })
+        # Inner join: only probes shared across ALL samples survive
+        merged_dt <- Reduce(function(x, y) merge(x, y, by = "Probe_ID", all = FALSE), data_list_clean)
+        cpg_ids <- merged_dt$Probe_ID
+        beta_matrix <- as.matrix(merged_dt[, -1, with = FALSE])
+        rownames(beta_matrix) <- cpg_ids
+        rm(data_list_clean, merged_dt)
+    }
+    if (nrow(beta_matrix) == 0) stop("No CpG shared by all training samples.")
+
+    # prcomp does not accept NA: drop CpGs missing in >10% of samples, impute the rest with the CpG mean
+    na_frac <- rowMeans(is.na(beta_matrix))
+    if (any(na_frac > 0)) {
+        beta_matrix <- beta_matrix[na_frac <= 0.10, , drop = FALSE]
+        w <- which(is.na(beta_matrix), arr.ind = TRUE)
+        if (nrow(w)) beta_matrix[w] <- rowMeans(beta_matrix, na.rm = TRUE)[w[, 1]]
+        message(paste("CpGs dropped (NA > 10%):", sum(na_frac > 0.10), "- values imputed:", nrow(w)))
+    }
     
-    # Inner join: only probes shared across ALL samples survive
-    merged_dt <- Reduce(function(x, y) merge(x, y, by = "Probe_ID", all = FALSE), data_list_clean)
-    
-    cpg_ids <- merged_dt$Probe_ID
-    beta_matrix <- as.matrix(merged_dt[, -1, with = FALSE])
-    rownames(beta_matrix) <- cpg_ids
-    
-    rm(data_list, data_list_clean, merged_dt)
+    if (exists("data_list", inherits = FALSE)) rm(data_list)
     gc()
     
     message(paste("Matrix dimensions:", nrow(beta_matrix), "CpGs x", ncol(beta_matrix), "Samples"))
