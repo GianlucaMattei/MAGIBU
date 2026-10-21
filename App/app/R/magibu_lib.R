@@ -4,7 +4,7 @@
 # operations: build a model, predict, plot (class zoom and global map).
 # ==============================================================================
 
-MAGIBU_VERSION <- "0.7.0"
+MAGIBU_VERSION <- "0.7.1"
 
 magibu_init <- function(app_dir) {
   suppressPackageStartupMessages({
