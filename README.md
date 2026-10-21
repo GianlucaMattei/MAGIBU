@@ -154,4 +154,4 @@ This function returns the three nearest reference classes for each sample, along
 
 If you use MaGiBu in your research, please cite:
 
-> Mattei et al. (in preparation)
+Mattei G, Giunti L, Scagnet M, Agushi R, Mussa F, Caporalini C, Sardi I, Civale VY, Magi A, Genitori L, Buccoliero AM. A MAGIBU-based model for pediatric and juvenile CNS tumors: an in-house epigenetic decision-support framework compared with online DNA methylation classifiers. Free Neuropathol. 2026 Aug 24;7:21. doi: 10.17879/freeneuropathology-2026-9648. PMID: 42683363; PMCID: PMC13532279.
