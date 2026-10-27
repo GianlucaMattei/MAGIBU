@@ -89,7 +89,24 @@ process_methylation_data(
 
 ### Step 10-B: Process New Sample Nanopore BAM Files
 
-To process Nanopore bam files it is necessary to run modkit with the following command:
+Nanopore BAM files (aligned to hg38, with MM/ML methylation tags, sorted and indexed) can be converted
+into the TSV files used by `project_new_samples` in two equivalent ways.
+
+**Option 1 - magibu-meth (faster).** `magibu-meth` (C, htslib; binary in `App/app/bin/`) reads the
+methylation tags directly from the BAM and writes the same entropy file as modkit + ModkitResorter.sh
+(identical row by row on a 30x whole-genome BAM, in 6.5 minutes with 16 threads):
+
+```
+REF=hg38.fasta # your fasta reference It must match the one used for the bam alignment.
+THN=16
+magibu-meth --entropy --ref ${REF} -t ${THN} -o sample_sorted.entropy.file.tsv dorado.output.bam
+mv sample_sorted.entropy.file.tsv /path/to/tsv/new_samples
+```
+
+By default only 5mC is counted as methylation; add `--sum-5hmc` to count 5mC + 5hmC.
+See `App/README.md` for all options.
+
+**Option 2 - modkit + ModkitResorter.sh.** Run modkit with the following command:
 
 ```
 REF=hg38.fasta # your fasta reference It must match the one used for the bam alignment.
