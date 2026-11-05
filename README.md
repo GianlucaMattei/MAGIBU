@@ -6,7 +6,7 @@
 ## Magibu App for Windows
 
 <p align="center">
-  <a href="https://github.com/GianlucaMattei/MAGIBU/releases/download/v0.7.0-app/Magibu-0.7.0-win.zip"><img alt="Download for Windows" height="64" src="https://img.shields.io/badge/DOWNLOAD%20FOR%20WINDOWS-v0.7.0-d73a49?style=for-the-badge"></a>
+  <a href="https://github.com/GianlucaMattei/MAGIBU/releases/download/v0.8.0-app/Magibu-0.8.0-win.zip"><img alt="Download for Windows" height="64" src="https://img.shields.io/badge/DOWNLOAD%20FOR%20WINDOWS-v0.8.0-d73a49?style=for-the-badge"></a>
 </p>
 
 <p align="center">

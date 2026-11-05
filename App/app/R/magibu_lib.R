@@ -340,12 +340,14 @@ magibu_distances <- function(meta, sample_ids, knn = 5, k_majority = c(5, 7, 9, 
 }
 
 # Family typicality p-value (R/core/typicality.R): columns Family_kNN5, Family_p, Typicality,
-# Plausible_families, N_plausible added to the Summary (after the coverage), all p-values in dist$Typicality.
+# Plausible_families, N_plausible added to the Summary (after the Group columns), all p-values in dist$Typicality.
 # p <= 0.05 = the sample is farther from its family than almost all members (alarm, not a diagnosis).
+# Summary order: Sample, coverage, Group1-3 (the result), typicality, then UMAP, NN and kNN (checks).
 magibu_add_typicality <- function(dist, meta, samples) {
   typ <- compute_typicality(magibu_standard_meta(meta), samples)
   dist$Summary <- merge(dist$Summary, typ$summary, by = "Sample", all.x = TRUE, sort = FALSE)
-  first <- intersect(c("Sample", "Model_CpG_coverage_pct", names(typ$summary)), names(dist$Summary))
+  groups <- paste0("Group", rep(1:3, each = 2), c("_Class", "_MeanDist"))
+  first <- intersect(c("Sample", "Model_CpG_coverage_pct", groups, names(typ$summary)), names(dist$Summary))
   data.table::setcolorder(dist$Summary, first)
   dist$Typicality <- typ$all_p
   dist

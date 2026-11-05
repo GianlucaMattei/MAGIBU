@@ -105,7 +105,7 @@ Results are saved, so an analysis can be opened again later without running it a
 3. **Download distances (Excel)**: saves all the tables in one Excel file.
 4. **Open results folder**: opens the output folder.
 
-Scroll the table to the right to see the classification:
+The classification comes right after the coverage:
 
 ![Classification columns](img/r03_summary_class.png)
 

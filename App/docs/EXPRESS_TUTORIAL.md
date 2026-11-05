@@ -13,7 +13,7 @@ Classify your samples in a few clicks. The red numbers in each picture match the
 
 For every option, see the [full tutorial](TUTORIAL.md). **Research use only.**
 
-> **Download:** [Magibu for Windows (zip, 650 MB)](https://github.com/GianlucaMattei/MAGIBU/releases/download/v0.7.0-app/Magibu-0.7.0-win.zip).
+> **Download:** [Magibu for Windows (zip, 650 MB)](https://github.com/GianlucaMattei/MAGIBU/releases/download/v0.8.0-app/Magibu-0.8.0-win.zip).
 > Unzip it in any folder and double click **Magibu.exe**. No installation needed.
 
 ---
@@ -74,7 +74,7 @@ Scroll down the left panel.
 
 **2.** **Name**: the sample.
 
-**3.** Scroll the table to the right to the **Group1_Class** column: the closest class, that is the class whose
+**3.** **Group1_Class**: the closest class, that is the class whose
 5 closest reference samples are, on average, nearest to your sample. **This is the result.**
 
 **4.** **Group1_MeanDist**: that average distance. **Smaller = more similar.** Compare it with
