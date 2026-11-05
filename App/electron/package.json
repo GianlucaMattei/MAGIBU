@@ -1,6 +1,6 @@
 {
   "name": "magibu",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Magibu - DNA methylation classifier (research use only)",
   "main": "main.js",
   "license": "GPL-3.0-or-later",

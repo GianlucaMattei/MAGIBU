@@ -1,26 +1,43 @@
-/* magibu-meth: CpG methylation pileup from a modified-base BAM (MM/ML tags),
-   restricted to the regions of a Magibu model. Written for Magibu with htslib;
-   the MM/ML tags follow the public SAM tags specification (hts-specs).
+/* magibu-meth: per-CpG methylation and entropy from a modified-base BAM (MM/ML tags).
+   Written for Magibu with htslib; the MM/ML tags follow the public SAM tags specification (hts-specs).
+   Replaces  modkit extract full --cpg --mapped-only  +  ModkitResorter.sh  (reshape, sort,
+   ParseModkit.pl of PoreMeth2).
 
-   Output: bedMethyl (same 18 columns as the ONT pileup format), strands combined
-   on the C of the CpG (0-based start), one row per modification code (h, m).
-   CpG sites are taken from the read sequence (C followed by G), so no reference
-   FASTA is needed.
+   Output, one row per CpG (0-based C of the CpG, strands combined), same columns as
+   *_sorted.entropy.file.tsv:
+     chr  pos  entropy  reads_with_3_CpG_pattern  beta  coverage
+   Rules of ParseModkit.pl: per read call p5mC, p5hmC = (ML + 0.5) / 256 (0 for implicit calls);
+   methylated if p5mC > 0.85, unmethylated if p5mC + p5hmC < 0.3, otherwise ambiguous.
+   beta = methylated / (methylated + unmethylated). The entropy of a CpG uses the reads that
+   carry it and the next two CpGs (8 possible patterns), normalised by 3. A CpG is written when
+   both the reads with the full pattern and the confident calls are more than 2.
+   Primary alignments only, chromosomes 1-22, X, Y (as ModkitResorter.sh).
+   Without -r: whole genome (PoreMeth2); with -r: only those regions (Magibu, much faster).
+   Entropy and beta are written with 4 decimals; --full-precision writes them as Perl does.
+   --no-entropy: beta only (same rules), every CpG with at least --min-cov confident calls
+   (default 3, as ParseModkit.pl), entropy and pattern reads written as NA.
+   --sum-5hmc: 5mC + 5hmC counted as methylation (methylated if p5mC + p5hmC > 0.85).
+   --split-5hmc: 5mC and 5hmC kept apart. Each call is 5mC if p5mC > 0.85, 5hmC if p5hmC > 0.85,
+   unmodified C if p5mC + p5hmC < 0.3, otherwise ambiguous; three columns are added after the six
+   above (which do not change):
+     beta_5mC = n5mC / n  beta_5hmC = n5hmC / n  n = n5mC + n5hmC + nC
+   beta_5hmC is NA when no read at the CpG carries 5hmC calls (BAM basecalled with a 5mC-only model).
+   CpG sites: from the reference with --ref (as modkit --cpg --reference), otherwise from the
+   read (C followed by G), dropping sites seen as CpG in less than --min-cpg-frac of the reads.
 
-   Calls whose confidence is below a threshold are counted as failed (Nfail); by default the
-   threshold is the 10th percentile of the confidence on a genome-wide sample of reads.
-   Sites where only a small fraction of the covering reads show a CpG (sequencing errors,
-   variants that destroy the CpG) are dropped: --min-cpg-frac, default 0.2.
-
-   usage: magibu-meth -r regions.bed [-o out.bedmethyl] [-t threads] [--min-cpg-frac F]
-                      [--filter-threshold P | --no-filtering] [--sample-reads N] in.bam */
+   usage: magibu-meth -o out.entropy.file.tsv [-r regions.bed] [--ref ref.fasta] [-t threads]
+                      [--min-cpg-frac F] [--full-precision] [--no-entropy] [--min-cov N]
+                      [--sum-5hmc] [--split-5hmc] in.bam
+   (--entropy is accepted and ignored: it is the only mode) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <math.h>
+#include <ctype.h>
 #include <htslib/sam.h>
-#include <htslib/kstring.h>
+#include <htslib/faidx.h>
 
 #define MAX_SPAN 200000
 #define MAX_REG_PER_CHUNK 256
@@ -31,11 +48,8 @@ typedef struct { int tid; hts_pos_t beg, end; int r0, r1; } chunk_t;  /* regions
 static region_t *regs; static int nregs;
 static chunk_t *chunks; static int nchunks;
 static const char *bam_path;
-static int thr_q = 0;
-static double min_frac = 0.2;      /* min fraction of covering reads that show the CpG */               /* pass threshold on the call confidence (0..255) */
-static int any_h = 0, any_m = 0;
-static kstring_t *outbuf;           /* one buffer per chunk */
-static int next_chunk = 0, done_chunks = 0;
+static double min_frac = 0.2;      /* min fraction of covering reads that show the CpG */
+static int done_chunks = 0;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static long n_reads_used = 0, n_reads_bad = 0;
 
@@ -107,243 +121,18 @@ static void read_regions(const char *path, sam_hdr_t *h) {
     }
 }
 
-/* ---- per read decoding ---- */
-typedef struct {
-    hts_pos_t beg, span;
-    uint8_t *mask;                       /* 1 = position inside a region */
-    int32_t *cm, *ch, *cc, *cf, *cn, *cd; /* 5mC, 5hmC, canonical, failed, no call, read depth */
-    long hist[256];                      /* sampling: confidence histogram */
-    int sample;
-} pile_t;
-
-/* confidence and call for one site: qm, qh = ML values (-1 = absent) */
-static inline void tally(pile_t *p, hts_pos_t pos, int qm, int qh, int nocall) {
-    if (!p->sample) {
-        if (pos < p->beg || pos >= p->beg + p->span) return;
-        hts_pos_t i = pos - p->beg;
-        if (!p->mask[i]) return;
-        if (nocall) { p->cn[i]++; return; }
-    } else if (nocall) return;
-    int m = qm < 0 ? 0 : qm, hh = qh < 0 ? 0 : qh;
-    int c = 255 - m - hh; if (c < 0) c = 0;
-    int best = c, kind = 0;
-    if (m > best) { best = m; kind = 1; }
-    if (hh > best) { best = hh; kind = 2; }
-    if (p->sample) { p->hist[best]++; return; }
-    hts_pos_t i = pos - p->beg;
-    if (best < thr_q) { p->cf[i]++; return; }
-    if (kind == 0) p->cc[i]++; else if (kind == 1) p->cm[i]++; else p->ch[i]++;
-}
-
-static int process_read(bam1_t *b, hts_base_mod_state *st, pile_t *p) {
-    if (bam_parse_basemod(b, st) < 0) return -1;   /* e.g. hard-clipped supplementary: MM/ML cannot be placed */
-    int ntypes = 0, *types = bam_mods_recorded(st, &ntypes);
-    int has_m = 0, has_h = 0, imp_m = 0, imp_h = 0;
-    for (int k = 0; k < ntypes; k++) {
-        int strand, implicit; char canon;
-        if (bam_mods_query_type(st, types[k], &strand, &implicit, &canon) < 0) continue;
-        if (canon != 'C' || strand != 0) continue;
-        if (types[k] == 'm') { has_m = 1; imp_m = implicit; }
-        if (types[k] == 'h') { has_h = 1; imp_h = implicit; }
-    }
-    if (!has_m && !has_h) return 0;
-    if (has_m) any_m = 1;
-    if (has_h) any_h = 1;
-    int rev = bam_is_rev(b);
-    const uint8_t *seq = bam_get_seq(b);
-    int qlen = b->core.l_qseq;
-    if (qlen < 2) return 0;
-
-    if (!p->sample) {                    /* read depth on region positions */
-        const uint32_t *cg = bam_get_cigar(b); hts_pos_t r = b->core.pos;
-        for (uint32_t c = 0; c < b->core.n_cigar; c++) {
-            int op = bam_cigar_op(cg[c]), len = bam_cigar_oplen(cg[c]);
-            if (op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF) {
-                hts_pos_t a0 = r > p->beg ? r : p->beg, a1 = r + len < p->beg + p->span ? r + len : p->beg + p->span;
-                for (hts_pos_t x = a0; x < a1; x++) if (p->mask[x - p->beg]) p->cd[x - p->beg]++;
-            }
-            if (bam_cigar_type(op) & 2) r += len;
-        }
-    }
-    /* explicit calls, ascending qpos in stored orientation */
-    hts_base_mod mods[8]; int qp, k;
-    int ncap = 1024, ne = 0;
-    int *eq = malloc(ncap * sizeof(int)), *em = malloc(ncap * sizeof(int)), *eh = malloc(ncap * sizeof(int));
-    while ((k = bam_next_basemod(b, st, mods, 8, &qp)) > 0) {
-        int qm = -1, qh = -1;
-        for (int j = 0; j < k && j < 8; j++) {
-            if (mods[j].canonical_base != 'C' || mods[j].strand != 0) continue;
-            if (mods[j].modified_base == 'm') qm = mods[j].qual;
-            else if (mods[j].modified_base == 'h') qh = mods[j].qual;
-        }
-        if (qm < 0 && qh < 0) continue;
-        if (ne == ncap) { ncap *= 2; eq = realloc(eq, ncap * sizeof(int)); em = realloc(em, ncap * sizeof(int)); eh = realloc(eh, ncap * sizeof(int)); }
-        eq[ne] = qp; em[ne] = qm; eh[ne] = qh; ne++;
-    }
-    /* stored orientation: forward read -> C at q, G at q+1 ; reverse read -> C at q-1, G at q (call on the G) */
-    const uint32_t *cig = bam_get_cigar(b); int nc = b->core.n_cigar;
-    int ci = 0, cq = 0; hts_pos_t cr = b->core.pos;   /* current cigar op starts at query cq, ref cr */
-    int ei = 0;
-    for (int q = 0; q < qlen; q++) {
-        int site;
-        if (!rev) site = q + 1 < qlen && bam_seqi(seq, q) == 2 && bam_seqi(seq, q + 1) == 4;
-        else      site = q > 0 && bam_seqi(seq, q) == 4 && bam_seqi(seq, q - 1) == 2;
-        if (!site) continue;
-        while (ei < ne && eq[ei] < q) ei++;
-        int qm = -1, qh = -1, nocall = 0;
-        if (ei < ne && eq[ei] == q) { qm = em[ei]; qh = eh[ei]; }
-        if (has_m && qm < 0) { if (imp_m) qm = 0; else nocall = 1; }
-        if (has_h && qh < 0) { if (imp_h) qh = 0; else if (!has_m || qm < 0) nocall = 1; }
-        if (qm >= 0 || qh >= 0) nocall = 0;
-        /* map q to the reference */
-        hts_pos_t ref = -1;
-        while (ci < nc) {
-            int op = bam_cigar_op(cig[ci]), len = bam_cigar_oplen(cig[ci]);
-            int cq_adv = (bam_cigar_type(op) & 1) ? len : 0, cr_adv = (bam_cigar_type(op) & 2) ? len : 0;
-            if (q < cq + cq_adv) {
-                if (cr_adv) ref = cr + (q - cq);      /* M, =, X */
-                break;
-            }
-            cq += cq_adv; cr += cr_adv; ci++;
-        }
-        if (ci >= nc) break;
-        if (ref < 0) continue;
-        tally(p, rev ? ref - 1 : ref, qm, qh, nocall);
-    }
-    free(eq); free(em); free(eh);
-    return 1;
-}
-
-static int read_ok(bam1_t *b) {
-    return !(b->core.flag & (BAM_FUNMAP | BAM_FSECONDARY | BAM_FQCFAIL));
-}
-
-/* ---- workers ---- */
 /* one base more on the right: a reverse strand read that starts on the G of the last CpG
    carries the call of that CpG */
 static void reg_string(int tid, hts_pos_t beg, hts_pos_t end, sam_hdr_t *h, char *buf, size_t n) {
     snprintf(buf, n, "{%s}:%lld-%lld", sam_hdr_tid2name(h, tid), (long long) beg + 1, (long long) end + 1);
 }
 
-static void emit(kstring_t *ks, const char *chr, hts_pos_t pos, char code, int nmod, int ncan, int noth, int nfail, int nnc, int ndiff) {
-    int nv = nmod + ncan + noth;
-    ksprintf(ks, "%s\t%lld\t%lld\t%c\t%d\t.\t%lld\t%lld\t255,0,0\t%d\t%.2f\t%d\t%d\t%d\t0\t%d\t%d\t%d\n",
-             chr, (long long) pos, (long long) pos + 1, code, nv, (long long) pos, (long long) pos + 1,
-             nv, 100.0 * nmod / nv, nmod, ncan, noth, nfail, ndiff, nnc);
-}
-
-static void *worker(void *arg) {
-    (void) arg;
-    samFile *in = sam_open(bam_path, "r");
-    sam_hdr_t *h = sam_hdr_read(in);
-    hts_idx_t *idx = sam_index_load(in, bam_path);
-    bam1_t *b = bam_init1();
-    hts_base_mod_state *st = hts_base_mod_state_alloc();
-    pile_t p; memset(&p, 0, sizeof p);
-    p.mask = malloc(MAX_SPAN + 1);
-    int32_t *arr = malloc(6 * (size_t) (MAX_SPAN + 1) * sizeof(int32_t));
-    char **rs = malloc(MAX_REG_PER_CHUNK * sizeof(char *));
-    for (int i = 0; i < MAX_REG_PER_CHUNK; i++) rs[i] = malloc(300);
-    long nreads = 0, nbad = 0;
-    for (;;) {
-        pthread_mutex_lock(&lock); int c = next_chunk++; pthread_mutex_unlock(&lock);
-        if (c >= nchunks) break;
-        chunk_t *ch = &chunks[c];
-        p.beg = ch->beg; p.span = ch->end - ch->beg;
-        memset(p.mask, 0, p.span);
-        memset(arr, 0, 6 * (size_t) p.span * sizeof(int32_t));
-        p.cm = arr; p.ch = arr + p.span; p.cc = arr + 2 * p.span; p.cf = arr + 3 * p.span; p.cn = arr + 4 * p.span; p.cd = arr + 5 * p.span;
-        int nr = ch->r1 - ch->r0;
-        for (int r = ch->r0; r < ch->r1; r++) {
-            memset(p.mask + (regs[r].beg - ch->beg), 1, regs[r].end - regs[r].beg);
-            reg_string(regs[r].tid, regs[r].beg, regs[r].end, h, rs[r - ch->r0], 300);
-        }
-        hts_itr_t *it = sam_itr_regarray(idx, h, rs, nr);
-        if (it) {
-            while (sam_itr_next(in, it, b) >= 0) if (read_ok(b)) { if (process_read(b, st, &p) < 0) nbad++; else nreads++; }
-            hts_itr_destroy(it);
-        }
-        kstring_t *ks = &outbuf[c];
-        const char *chr = sam_hdr_tid2name(h, ch->tid);
-        for (hts_pos_t i = 0; i < p.span; i++) {
-            if (!p.mask[i]) continue;
-            int nv = p.cm[i] + p.ch[i] + p.cc[i];
-            if (nv == 0) continue;
-            /* reads covering the site that do not show a CpG there: a site seen as CpG only in
-               a small fraction of the reads is a sequencing error, not a CpG of the genome */
-            int seen = nv + p.cf[i] + p.cn[i], ndiff = p.cd[i] > seen ? p.cd[i] - seen : 0;
-            if (seen < min_frac * (seen + ndiff)) continue;
-            if (any_h) emit(ks, chr, ch->beg + i, 'h', p.ch[i], p.cc[i], p.cm[i], p.cf[i], p.cn[i], ndiff);
-            if (any_m) emit(ks, chr, ch->beg + i, 'm', p.cm[i], p.cc[i], p.ch[i], p.cf[i], p.cn[i], ndiff);
-        }
-        pthread_mutex_lock(&lock);
-        done_chunks++;
-        if (done_chunks % (nchunks / 100 + 1) == 0 || done_chunks == nchunks)
-            fprintf(stderr, "PROGRESS %d/%d\n", done_chunks, nchunks);
-        pthread_mutex_unlock(&lock);
-    }
-    pthread_mutex_lock(&lock); n_reads_used += nreads; n_reads_bad += nbad; pthread_mutex_unlock(&lock);
-    for (int i = 0; i < MAX_REG_PER_CHUNK; i++) free(rs[i]);
-    free(rs); free(arr); free(p.mask);
-    hts_base_mod_state_free(st); bam_destroy1(b); hts_idx_destroy(idx); sam_hdr_destroy(h); sam_close(in);
-    return NULL;
-}
-
-/* threshold = 10th percentile of the call confidence on a sample of reads taken in windows spread
-   evenly over the whole length of the contigs that carry regions (genome-wide, not only the regions) */
-static int estimate_threshold(samFile *in, sam_hdr_t *h, hts_idx_t *idx, int nsample) {
-    pile_t p; memset(&p, 0, sizeof p); p.sample = 1;
-    bam1_t *b = bam_init1(); hts_base_mod_state *st = hts_base_mod_state_alloc();
-    int nt = sam_hdr_nref(h); char *used = calloc(nt, 1); double L = 0;
-    for (int i = 0; i < nregs; i++) used[regs[i].tid] = 1;
-    for (int t = 0; t < nt; t++) if (used[t]) L += sam_hdr_tid2len(h, t);
-    int npick = 200, per = nsample / npick + 1, got = 0;
-    char reg[300], *rs[1] = { reg };
-    for (int k = 0; k < npick; k++) {
-        double x = (k + 0.5) * L / npick; int t = 0;
-        for (t = 0; t < nt; t++) if (used[t]) { double len = sam_hdr_tid2len(h, t); if (x < len) break; x -= len; }
-        if (t >= nt) break;
-        reg_string(t, (hts_pos_t) x, (hts_pos_t) x + 1000000, h, reg, sizeof reg);
-        hts_itr_t *it = sam_itr_regarray(idx, h, rs, 1);
-        if (!it) continue;
-        int n = 0;
-        while (n < per && sam_itr_next(in, it, b) >= 0) if (read_ok(b)) { if (process_read(b, st, &p) > 0) n++; }
-        got += n;
-        hts_itr_destroy(it);
-    }
-    long tot = 0, cum = 0; for (int i = 0; i < 256; i++) tot += p.hist[i];
-    int thr = 0;
-    for (int i = 0; i < 256; i++) { cum += p.hist[i]; if (cum >= 0.1 * tot) { thr = i; break; } }
-    fprintf(stderr, "sampled %d reads, %ld calls\n", got, tot);
-    free(used); hts_base_mod_state_free(st); bam_destroy1(b);
-    return tot ? thr : 0;
-}
-
-/* =====================================================================================
-   --entropy mode: replaces  modkit extract full --cpg --mapped-only  +  ModkitResorter.sh
-   (reshape, sort, ParseModkit.pl of PoreMeth2). Output, one row per CpG (0-based C of the
-   CpG, strands combined), same columns as *_sorted.entropy.file.tsv:
-     chr  pos  entropy  reads_with_3_CpG_pattern  beta  coverage
-   Rules of ParseModkit.pl: per read call p5mC, p5hmC = (ML + 0.5) / 256 (0 for implicit calls);
-   methylated if p5mC > 0.85, unmethylated if p5mC + p5hmC < 0.3, otherwise ambiguous.
-   beta = methylated / (methylated + unmethylated). The entropy of a CpG uses the reads that
-   carry it and the next two CpGs (8 possible patterns), normalised by 3. A CpG is written when
-   both the reads with the full pattern and the confident calls are more than 2.
-   Primary alignments only, chromosomes 1-22, X, Y (as ModkitResorter.sh).
-   Without -r: whole genome (PoreMeth2); with -r: only those regions (Magibu, much faster).
-   Entropy and beta are written with 4 decimals; --full-precision writes them as Perl does.
-   --no-entropy: beta only (same rules), every CpG with at least --min-cov confident calls
-   (default 3, as ParseModkit.pl), entropy and pattern reads written as NA.
-   --sum-5hmc: 5mC + 5hmC counted as methylation (methylated if p5mC + p5hmC > 0.85).
-   CpG sites: from the reference with --ref (as modkit --cpg --reference), otherwise from the
-   read (C followed by G), dropping sites seen as CpG in less than --min-cpg-frac of the reads.
-   ===================================================================================== */
-#include <math.h>
-#include <ctype.h>
-#include <htslib/faidx.h>
-
-typedef struct { hts_pos_t pos; uint64_t uid; int8_t st; } call_t;
-typedef struct { hts_pos_t pos; int n, cap, cov, meth; uint64_t *uid; int8_t *st; } wpos_t;
+/* ---- calls ---- */
+/* st: status for beta and entropy (1 methylated, 0 unmethylated, -1 ambiguous; --sum-5hmc rule).
+   cls: split status (CLS_*), plus CLS_H_SEEN when the read carries 5hmC calls. */
+enum { CLS_C = 0, CLS_M = 1, CLS_H = 2, CLS_AMB = 3, CLS_H_SEEN = 4 };
+typedef struct { hts_pos_t pos; uint64_t uid; int8_t st, cls; } call_t;
+typedef struct { hts_pos_t pos; int n, cap, cov, meth, nm, nh, nc, hseen; uint64_t *uid; int8_t *st; } wpos_t;
 typedef struct { int tid; int c0, c1; } chrom_t;          /* chunks c0..c1-1 */
 
 static const char *ref_path = NULL;
@@ -365,16 +154,21 @@ static int cmp_call(const void *a, const void *b) {
 }
 
 typedef struct { call_t *v; size_t n, cap; } callvec_t;
-static inline void cv_push(callvec_t *c, hts_pos_t pos, uint64_t uid, int st) {
+static inline void cv_push(callvec_t *c, hts_pos_t pos, uint64_t uid, int st, int cls) {
     if (c->n == c->cap) { c->cap = c->cap ? 2 * c->cap : 65536; c->v = realloc(c->v, c->cap * sizeof(call_t)); }
-    c->v[c->n].pos = pos; c->v[c->n].uid = uid; c->v[c->n].st = (int8_t) st; c->n++;
+    c->v[c->n].pos = pos; c->v[c->n].uid = uid; c->v[c->n].st = (int8_t) st; c->v[c->n].cls = (int8_t) cls; c->n++;
 }
 
 static int ent_sum_h = 0;             /* --sum-5hmc: methylated if p5mC + p5hmC > 0.85 */
+static int ent_split = 0;             /* --split-5hmc: add beta_5mC, beta_5hmC, n */
 static inline int call_status(double ml, double hl) {
     if ((ent_sum_h ? ml + hl : ml) > 0.85) return 1;
     if (ml + hl < 0.3) return 0;
     return -1;
+}
+static inline int call_class(double ml, double hl, int has_h) {
+    int c = ml > 0.85 ? CLS_M : hl > 0.85 ? CLS_H : ml + hl < 0.3 ? CLS_C : CLS_AMB;
+    return c | (has_h ? CLS_H_SEEN : 0);
 }
 
 /* calls of one read inside [beg, end) (and in mask if given). ref = reference for [beg-1, end+1)
@@ -383,13 +177,13 @@ static int entropy_read(bam1_t *b, hts_base_mod_state *st, hts_pos_t beg, hts_po
                         const char *ref, int32_t *depth, callvec_t *cv) {
     if (bam_parse_basemod(b, st) < 0) return -1;
     int ntypes = 0, *types = bam_mods_recorded(st, &ntypes);
-    int has_m = 0, has_h = 0, imp_m = 0, imp_h = 0;
+    int has_m = 0, has_h = 0, imp_m = 0;
     for (int k = 0; k < ntypes; k++) {
         int strand, implicit; char canon;
         if (bam_mods_query_type(st, types[k], &strand, &implicit, &canon) < 0) continue;
         if (canon != 'C' || strand != 0) continue;
         if (types[k] == 'm') { has_m = 1; imp_m = implicit; }
-        if (types[k] == 'h') { has_h = 1; imp_h = implicit; }
+        if (types[k] == 'h') has_h = 1;
     }
     if (!has_m) return 0;
     int rev = bam_is_rev(b), qlen = b->core.l_qseq;
@@ -435,8 +229,7 @@ static int entropy_read(bam1_t *b, hts_base_mod_state *st, hts_pos_t beg, hts_po
                 double ml, hl;
                 if (qm >= 0) ml = (qm + 0.5) / 256.0; else if (imp_m) ml = 0; else continue;
                 if (qh >= 0) hl = (qh + 0.5) / 256.0; else hl = 0;
-                (void) imp_h; (void) has_h;
-                cv_push(cv, pos, uid, call_status(ml, hl));
+                cv_push(cv, pos, uid, call_status(ml, hl), call_class(ml, hl, has_h));
             }
         }
         if (bam_cigar_type(op) & 1) q += len;
@@ -446,6 +239,7 @@ static int entropy_read(bam1_t *b, hts_base_mod_state *st, hts_pos_t beg, hts_po
     return 1;
 }
 
+/* ---- output ---- */
 static int ent_decimals = 4;          /* -1 = full precision, as Perl prints (%.15g) */
 static int ent_window = 1;            /* 0 = --no-entropy: beta only, no window of 3 CpGs */
 static int ent_min_cov = 3;           /* confident calls needed to write a CpG (ParseModkit.pl: > 2) */
@@ -455,6 +249,29 @@ static void put_num(FILE *f, double x) {
     char *e = buf + strlen(buf) - 1;                     /* 0.5000 -> 0.5, 1.0000 -> 1 */
     if (strchr(buf, '.')) { while (*e == '0') *e-- = 0; if (*e == '.') *e = 0; }
     fputs(strcmp(buf, "-0") ? buf : "0", f);
+}
+
+/* counts of one CpG, one call per read (a read seen twice at the same CpG counts once) */
+static void add_call(wpos_t *p, const call_t *c) {
+    if (c->st >= 0) { p->cov++; p->meth += c->st; }
+    int k = c->cls & 3;
+    if (c->cls & CLS_H_SEEN) p->hseen = 1;
+    if (k == CLS_M) p->nm++; else if (k == CLS_H) p->nh++; else if (k == CLS_C) p->nc++;
+}
+
+/* end of a row: beta, coverage and, with --split-5hmc, beta_5mC, beta_5hmC, n */
+static void put_tail(FILE *f, const wpos_t *p) {
+    put_num(f, (double) p->meth / p->cov); fprintf(f, "\t%d", p->cov);
+    if (ent_split) {
+        int n = p->nm + p->nh + p->nc;
+        if (n == 0) fputs("\tNA\tNA\t0", f);
+        else {
+            fputc('\t', f); put_num(f, (double) p->nm / n); fputc('\t', f);
+            if (p->hseen) put_num(f, (double) p->nh / n); else fputs("NA", f);
+            fprintf(f, "\t%d", n);
+        }
+    }
+    fputc('\n', f);
 }
 
 /* window of 3 consecutive CpGs: output for w[0] */
@@ -480,7 +297,7 @@ static int window_out(FILE *f, const char *chr, wpos_t *w) {
         e = -e * (1.0 / 3);
         fprintf(f, "%s\t%lld\t", chr, (long long) w[0].pos);
         put_num(f, e); fprintf(f, "\t%ld\t", sum);
-        put_num(f, (double) w[0].meth / w[0].cov); fprintf(f, "\t%d\n", w[0].cov);
+        put_tail(f, &w[0]);
         return 1;
     }
     return 0;
@@ -561,15 +378,14 @@ static void *entropy_worker(void *arg) {
                 size_t j = i; while (j < cv.n && cv.v[j].pos == cv.v[i].pos) j++;
                 int n = (int) (j - i);
                 if (!ent_window) {                               /* beta only: write the CpG now */
-                    int cov = 0, meth = 0; uint64_t last = 0;
+                    wpos_t p; memset(&p, 0, sizeof p);
                     for (size_t k = i; k < j; k++) {
-                        if (k > i && cv.v[k].uid == last) continue;
-                        last = cv.v[k].uid;
-                        if (cv.v[k].st >= 0) { cov++; meth += cv.v[k].st; }
+                        if (k > i && cv.v[k].uid == cv.v[k - 1].uid) continue;
+                        add_call(&p, &cv.v[k]);
                     }
-                    if (cov >= ent_min_cov && cov > 0) {
+                    if (p.cov >= ent_min_cov && p.cov > 0) {
                         fprintf(f, "%s\t%lld\tNA\tNA\t", chr, (long long) cv.v[i].pos);
-                        put_num(f, (double) meth / cov); fprintf(f, "\t%d\n", cov);
+                        put_tail(f, &p);
                         rows++;
                     }
                     i = j; continue;
@@ -580,11 +396,11 @@ static void *entropy_worker(void *arg) {
                 }
                 wpos_t *p = &w[nw++];
                 if (p->cap < n) { p->cap = n; p->uid = realloc(p->uid, n * sizeof(uint64_t)); p->st = realloc(p->st, n); }
-                p->pos = cv.v[i].pos; p->n = 0; p->cov = 0; p->meth = 0;
+                p->pos = cv.v[i].pos; p->n = 0; p->cov = p->meth = p->nm = p->nh = p->nc = p->hseen = 0;
                 for (size_t k = i; k < j; k++) {
                     if (p->n && p->uid[p->n - 1] == cv.v[k].uid) continue;     /* same read twice */
                     p->uid[p->n] = cv.v[k].uid; p->st[p->n] = cv.v[k].st; p->n++;
-                    if (cv.v[k].st >= 0) { p->cov++; p->meth += cv.v[k].st; }
+                    add_call(p, &cv.v[k]);
                 }
                 i = j;
             }
@@ -649,9 +465,10 @@ static int run_entropy(const char *rfile, const char *ofile, int nth) {
     }
     if (rfile) free(chunks);
     chunks = all; nchunks = na;
-    fprintf(stderr, "%s: %s, %d chromosomes, %d chunks, CpG sites from %s, minimum coverage %d\n",
+    fprintf(stderr, "%s: %s, %d chromosomes, %d chunks, CpG sites from %s, minimum coverage %d, %s%s\n",
             ent_window ? "entropy mode" : "beta mode (no entropy)", rfile ? "model regions" : "whole genome",
-            nechr, nchunks, ref_path ? "the reference" : "the reads", ent_min_cov);
+            nechr, nchunks, ref_path ? "the reference" : "the reads", ent_min_cov,
+            ent_sum_h ? "beta = 5mC + 5hmC" : "beta = 5mC", ent_split ? ", 5mC and 5hmC also split" : "");
     tmp_names = malloc(nechr * sizeof(char *));
     for (int i = 0; i < nechr; i++) {
         tmp_names[i] = malloc(strlen(ofile) + 32);
@@ -675,78 +492,32 @@ static int run_entropy(const char *rfile, const char *ofile, int nth) {
 }
 
 int main(int argc, char **argv) {
-    const char *rfile = NULL, *ofile = NULL; int nth = 4, nofilt = 0, nsample = 10000, entropy = 0; double fthr = -1;
+    const char *rfile = NULL, *ofile = NULL; int nth = 4;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-r") && i + 1 < argc) rfile = argv[++i];
         else if (!strcmp(argv[i], "-o") && i + 1 < argc) ofile = argv[++i];
         else if (!strcmp(argv[i], "-t") && i + 1 < argc) nth = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--filter-threshold") && i + 1 < argc) fthr = atof(argv[++i]);
-        else if (!strcmp(argv[i], "--no-filtering")) nofilt = 1;
-        else if (!strcmp(argv[i], "--entropy")) entropy = 1;
+        else if (!strcmp(argv[i], "--entropy")) ;                    /* the only mode, kept for old command lines */
         else if (!strcmp(argv[i], "--full-precision")) ent_decimals = -1;
         else if (!strcmp(argv[i], "--no-entropy")) ent_window = 0;
         else if (!strcmp(argv[i], "--sum-5hmc")) ent_sum_h = 1;
+        else if (!strcmp(argv[i], "--split-5hmc")) ent_split = 1;
         else if (!strcmp(argv[i], "--min-cov") && i + 1 < argc) ent_min_cov = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--ref") && i + 1 < argc) ref_path = argv[++i];
         else if (!strcmp(argv[i], "--min-cpg-frac") && i + 1 < argc) min_frac = atof(argv[++i]);
-        else if (!strcmp(argv[i], "--sample-reads") && i + 1 < argc) nsample = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--version")) { printf("magibu-meth 0.2 (htslib %s)\n", hts_version()); return 0; }
+        else if (!strcmp(argv[i], "--version")) { printf("magibu-meth 0.3 (htslib %s)\n", hts_version()); return 0; }
         else if (argv[i][0] != '-' && !bam_path) bam_path = argv[i];
         else die("unknown argument", argv[i]);
     }
-    if (!bam_path || (!entropy && !rfile) || (entropy && !ofile)) {
-        fprintf(stderr, "usage: magibu-meth -r regions.bed [-o out.bedmethyl] [-t threads] [--min-cpg-frac F]\n"
-                        "       [--filter-threshold P | --no-filtering] [--sample-reads N] in.bam\n"
-                        "       magibu-meth --entropy -o out.entropy.file.tsv [-r regions.bed] [--ref ref.fasta]\n"
-                        "       [-t threads] [--min-cpg-frac F] [--full-precision] [--no-entropy] [--min-cov N] [--sum-5hmc] in.bam\n");
+    if (!bam_path || !ofile) {
+        fprintf(stderr, "usage: magibu-meth -o out.entropy.file.tsv [-r regions.bed] [--ref ref.fasta] [-t threads]\n"
+                        "       [--min-cpg-frac F] [--full-precision] [--no-entropy] [--min-cov N]\n"
+                        "       [--sum-5hmc] [--split-5hmc] in.bam\n"
+                        "  --sum-5hmc    beta (column 5) = 5mC + 5hmC; default 5mC only\n"
+                        "  --split-5hmc  also write beta_5mC, beta_5hmC and n (columns 7-9)\n");
         return 1;
     }
     if (nth < 1) nth = 1;
     hts_set_log_level(HTS_LOG_OFF);
-    if (entropy) return run_entropy(rfile, ofile, nth);
-    samFile *in = sam_open(bam_path, "r");
-    if (!in) die("cannot open BAM", bam_path);
-    sam_hdr_t *h = sam_hdr_read(in);
-    if (!h) die("cannot read BAM header", bam_path);
-    hts_idx_t *idx = sam_index_load(in, bam_path);
-    if (!idx) die("BAM index (.bai) not found next to", bam_path);
-    read_regions(rfile, h);
-    fprintf(stderr, "regions: %d merged, %d chunks\n", nregs, nchunks);
-    if (nofilt) thr_q = 0;
-    else if (fthr >= 0) thr_q = (int) (fthr * 256);
-    else thr_q = estimate_threshold(in, h, idx, nsample);
-    fprintf(stderr, "filter threshold: %.4f\n", thr_q / 256.0);
-    any_m = any_h = 0;                     /* decided again on the full pass */
-
-    outbuf = calloc(nchunks, sizeof(kstring_t));
-    pthread_t *tt = malloc(nth * sizeof(pthread_t));
-    /* first pass on one chunk tells which codes exist, so all rows get the same codes */
-    {
-        bam1_t *b = bam_init1(); hts_base_mod_state *st = hts_base_mod_state_alloc();
-        pile_t p; memset(&p, 0, sizeof p); p.sample = 1;
-        for (int k = 0; k < nchunks && !(any_m || any_h); k += 1 + nchunks / 50) {
-            char reg[300], *rs[1] = { reg };
-            reg_string(chunks[k].tid, chunks[k].beg, chunks[k].end, h, reg, sizeof reg);
-            hts_itr_t *it = sam_itr_regarray(idx, h, rs, 1);
-            int n = 0;
-            if (it) { while (n < 200 && sam_itr_next(in, it, b) >= 0) if (read_ok(b)) { process_read(b, st, &p); n++; } hts_itr_destroy(it); }
-        }
-        hts_base_mod_state_free(st); bam_destroy1(b);
-    }
-    if (!any_m && !any_h) die("no 5mC/5hmC calls (MM/ML tags) found in", bam_path);
-    for (int i = 0; i < nth; i++) pthread_create(&tt[i], NULL, worker, NULL);
-    for (int i = 0; i < nth; i++) pthread_join(tt[i], NULL);
-
-    FILE *out = ofile ? fopen(ofile, "wb") : stdout;
-    if (!out) die("cannot write", ofile);
-    long rows = 0;
-    for (int c = 0; c < nchunks; c++) {
-        if (outbuf[c].l) fwrite(outbuf[c].s, 1, outbuf[c].l, out);
-        for (size_t i = 0; i < outbuf[c].l; i++) rows += outbuf[c].s[i] == '\n';
-        free(outbuf[c].s);
-    }
-    if (ofile) fclose(out);
-    fprintf(stderr, "done: %ld rows, %ld reads used, %ld reads skipped (methylation tags not readable)\n", rows, n_reads_used, n_reads_bad);
-    hts_idx_destroy(idx); sam_hdr_destroy(h); sam_close(in);
-    return 0;
+    return run_entropy(rfile, ofile, nth);
 }

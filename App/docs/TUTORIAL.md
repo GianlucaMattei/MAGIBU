@@ -58,8 +58,10 @@ Needed only for nanopore BAM files. You can leave the defaults.
 4. Click **Nanopore options (BAM)** to open the panel.
 5. **Minimum coverage per CpG**: CpG sites read fewer times than this are ignored. Keep 1 for short runs.
 6. **Methylation**:
-   - **5mC only** (default): same as the original Magibu pipeline;
-   - **5mC + 5hmC**: hydroxymethylation is counted as methylation.
+   - **5mC and 5hmC separated** (default): 5mC and 5hmC are read apart and only 5mC is used for the classification;
+   - **5mC + 5hmC summed**: hydroxymethylation is counted as methylation, as in older analyses.
+
+   Both values are always saved in the `Bam_beta` folder of the results.
 
 ### Choose where to save and start
 
@@ -107,15 +109,19 @@ Scroll the table to the right to see the classification:
 
 ![Classification columns](img/r03_summary_class.png)
 
-5. **NN1_Class**: the class of the reference sample closest to your sample.
+5. **Group1_Class**: the closest class, that is the class whose 5 closest reference samples are, on average,
+   nearest to your sample. **This is the result.** **Group1_MeanDist** is that average distance (smaller = closer).
 
-   The other columns are read the same way:
-   - **NN2** and **NN3**: the second and third closest reference samples;
-   - **Group1..3**: the three closest classes;
+   The other columns are checks:
+   - **Group2** and **Group3**: the second and third closest classes. When Group2_MeanDist is close to
+     Group1_MeanDist, the sample lies between two classes;
+   - **NN1..NN3**: the single reference samples closest to yours. One sample can be misleading: use them only to
+     confirm Group1;
    - **kNN5_Class**: the most common class among the 5 closest reference samples;
    - **kNN5_Purity**: the share of those 5 samples that belong to that class (1 = all of them).
 
-   A sample is clearly placed when these columns agree and the distances (`_Dist`) are small.
+   A sample is clearly placed when these columns agree and Group1 is much closer than Group2. Distances are
+   relative, not probabilities: there is no fixed cut-off.
 
 ### Sample names
 

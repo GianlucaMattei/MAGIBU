@@ -77,7 +77,7 @@ ui <- page_navbar(
       selectInput("pred_array", "Illumina array type (idat only)", array_choices, width = "100%"),
       accordion(open = FALSE, accordion_panel("Nanopore options (BAM)",
         numericInput("pred_mincov", "Minimum coverage per CpG", 1, min = 1, step = 1, width = "100%"),
-        radioButtons("pred_5hmc", "Methylation", c("5mC only" = "m", "5mC + 5hmC" = "mh"), inline = TRUE))),
+        radioButtons("pred_5hmc", "Methylation", c("5mC and 5hmC separated" = "m", "5mC + 5hmC summed" = "mh"), inline = TRUE))),
       h5("3. Results"),
       path_input("pred_out", "Output folder", default_out, "dir"),
       textInput("pred_name", "Analysis name", "magibu", width = "100%"),
@@ -104,6 +104,11 @@ ui <- page_navbar(
       nav_panel("Distances by class", value = "dist",
         selectInput("dist_sample", "Sample", choices = NULL, width = "400px"),
         DT::DTOutput("tbl_dist")),
+      nav_panel("Family typicality", value = "typ",
+        p(class = "text-muted small", "p = how typical the sample is for each methylation family (text before the comma), compared with the spread of the reference samples of that family. p <= 0.05: farther from the family than almost all its members. Several families with p > 0.05 = ambiguous; none = out of distribution. Families with fewer than 20 reference samples are not assessed. Use it as an alarm: it does not choose between subclasses."),
+        selectInput("typ_sample", "Sample", choices = NULL, width = "400px"),
+        uiOutput("typ_old"),
+        DT::DTOutput("tbl_typ")),
       nav_panel("Classic plot", value = "classic",
         div(class = "mg-toolbar", selectInput("classic_sample", "Sample", choices = NULL, width = "400px"),
             downloadButton("dl_pdf", "Download PDF (all samples)", class = "btn-sm")),
@@ -188,6 +193,7 @@ ui <- page_navbar(
     h4(paste("Magibu App", MAGIBU_VERSION)),
     p(strong("For research use only."), " Not a diagnostic device: the result does not replace the diagnosis."),
     p("The prediction projects each sample onto the UMAP map of the chosen model and measures its distances from the reference samples."),
+    p("Family typicality (from 0.8.0): conformal p-value of the sample for each family, measured against the spread of the reference samples of that family. p <= 0.05 marks the classification as atypical."),
     p("The UMAP projection is stochastic: running the same sample again can move it slightly (about 0.2 UMAP units), as in the original Magibu pipeline."),
     p("Third party software included (R and R packages, Electron): see the THIRD_PARTY_LICENSES file in the program folder."))),
 
@@ -288,7 +294,17 @@ server <- function(input, output, session) {
                    min_cov = input$pred_mincov, include_5hmc = identical(input$pred_5hmc, "mh")))
   })
 
-  output$pred_status <- renderUI(tagList(status_box(rv$st_pred), status_box(low_cov())))
+  output$pred_status <- renderUI(tagList(status_box(rv$st_pred), status_box(low_cov()), status_box(atypical())))
+  # samples atypical for their family or out of distribution (family typicality p, from 0.8.0)
+  atypical <- reactive({
+    sm <- rv$result$distances$Summary
+    if (is.null(sm) || !"Typicality" %in% names(sm)) return(NULL)
+    bad <- sm[grepl("^(ATYPICAL|OUT OF DISTRIBUTION)", Typicality)]
+    if (nrow(bad) == 0) return(NULL)
+    nm <- snames()
+    list(type = "warn", msg = paste0("Atypical or out of distribution (family p <= 0.05): ",
+                                     paste(unname(nm[bad$Sample]), collapse = ", "), ". Check the classification."))
+  })
   # samples with few model CpGs measured (e.g. short nanopore runs): position on the map unreliable
   low_cov <- reactive({
     sm <- rv$result$distances$Summary
@@ -311,6 +327,7 @@ server <- function(input, output, session) {
     keep <- function(x) if (!is.null(x) && x %in% ch) x else ch[[1]]
     updateSelectInput(session, "dist_sample", choices = ch, selected = keep(isolate(input$dist_sample)))
     updateSelectInput(session, "classic_sample", choices = ch, selected = keep(isolate(input$classic_sample)))
+    updateSelectInput(session, "typ_sample", choices = ch, selected = keep(isolate(input$typ_sample)))
     sel <- isolate(input$zoom_samples); sel <- if (length(sel) > 0) intersect(sel, ch) else unname(ch)
     updateSelectizeInput(session, "zoom_samples", choices = ch, selected = sel, server = FALSE)
   })
@@ -325,6 +342,16 @@ server <- function(input, output, session) {
     req(rv$result, input$dist_sample)
     d <- rv$result$distances$Distances
     DT::datatable(d[d$Sample == input$dist_sample, -1], rownames = FALSE, options = dt_opts, selection = "none")
+  })
+  output$typ_old <- renderUI({
+    req(rv$result)
+    if (is.null(rv$result$distances$Typicality))
+      p(class = "text-muted", "This analysis was made with an older version: no typicality. Run the prediction again to compute it.")
+  })
+  output$tbl_typ <- DT::renderDT({
+    req(rv$result, input$typ_sample, rv$result$distances$Typicality)
+    d <- rv$result$distances$Typicality
+    DT::datatable(d[d$Sample == input$typ_sample, -1], rownames = FALSE, options = dt_opts, selection = "none")
   })
   output$plot_classic <- renderPlot({
     req(rv$result, input$classic_sample)

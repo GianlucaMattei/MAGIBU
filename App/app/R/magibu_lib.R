@@ -4,7 +4,7 @@
 # operations: build a model, predict, plot (class zoom and global map).
 # ==============================================================================
 
-MAGIBU_VERSION <- "0.7.1"
+MAGIBU_VERSION <- "0.8.0"
 
 magibu_init <- function(app_dir) {
   suppressPackageStartupMessages({
@@ -72,6 +72,7 @@ magibu_is_new <- function(meta) !is.na(meta$Batch) & meta$Batch == "New_Projecte
 # What a tsv file contains, from its first line:
 #   "magibu"    Magibu tsv (Probe_ID, Beta, chr_hg38, pos_hg38), any platform
 #   "entropy"   magibu-meth or modkit extract + ModkitResorter (Poremeth2) output: chr, pos, -, -, beta (0-1), -
+#               (magibu-meth --split-5hmc adds beta_5mC, beta_5hmC, n: 9 columns)
 magibu_file_kind <- function(f) {
   l <- readLines(f, n = 5, warn = FALSE)
   l <- l[nzchar(l) & !startsWith(l, "#") & !startsWith(l, "track")]
@@ -79,7 +80,7 @@ magibu_file_kind <- function(f) {
   if (grepl("Probe_ID", l[1], fixed = TRUE)) return("magibu")
   x <- strsplit(l[min(2, length(l))], "\t", fixed = TRUE)[[1]]
   num <- function(v) suppressWarnings(as.numeric(v))
-  if (length(x) == 6 && !is.na(num(x[2])) && !is.na(num(x[5])) && num(x[5]) >= 0 && num(x[5]) <= 1) return("entropy")
+  if (length(x) %in% c(6, 9) && !is.na(num(x[2])) && !is.na(num(x[5])) && num(x[5]) >= 0 && num(x[5]) <= 1) return("entropy")
   stop("Unrecognised methylation file (expected Magibu tsv or entropy tsv): ", basename(f))
 }
 
@@ -198,9 +199,16 @@ magibu_idat_to_tsv <- function(inputs, work_dir, tsv_dir, array_type = "auto", n
   dt[keep]
 }
 
-magibu_read_nanopore <- function(f) {
+# split_5hmc = TRUE: beta = beta_5mC (column 7, 5hmC calls counted as not 5mC), when the file has it;
+# otherwise column 5 (5mC only with the original rule, or 5mC + 5hmC if made with --sum-5hmc)
+magibu_read_nanopore <- function(f, split_5hmc = FALSE) {
   if (magibu_file_kind(f) != "entropy") stop("Not a nanopore file: ", basename(f))
-  dt <- data.table::fread(f, sep = "\t", header = FALSE, select = c(1, 2, 5), col.names = c("chr", "pos", "beta"))
+  ncol <- length(strsplit(readLines(f, n = 1, warn = FALSE), "\t", fixed = TRUE)[[1]])
+  col <- if (split_5hmc && ncol == 9) 7 else 5
+  if (split_5hmc && ncol != 9)
+    message("  ", basename(f), ": no separate 5mC/5hmC columns, beta from column 5")
+  dt <- data.table::fread(f, sep = "\t", header = FALSE, select = c(1, 2, col), col.names = c("chr", "pos", "beta"),
+                          na.strings = "NA")
   dt[, chr := as.character(chr)]
   dt[!startsWith(chr, "chr"), chr := paste0("chr", chr)]
   dt[!is.na(beta) & beta >= 0 & beta <= 1]
@@ -222,6 +230,8 @@ magibu_cpg_coverage <- function(tsv, model, window = 502L) {
 # if p5mC + p5hmC < 0.3; with include_5hmc methylated if p5mC + p5hmC > 0.85), without the entropy,
 # so no 3-CpG window and no 3-read pattern rule: every CpG with at least min_cov confident calls. Through the BAM index only the regions around the model CpGs
 # (+-flank bp) are read, so the regions follow the chosen model. No reference FASTA needed.
+# Always run with --split-5hmc: columns 7-9 keep 5mC and 5hmC apart (beta_5mC, beta_5hmC, n), so both are saved
+# whatever the choice; the classification uses beta_5mC (include_5hmc = FALSE) or the 5mC + 5hmC sum (column 5).
 # The file (entropy tsv layout, entropy = NA) is kept in <out>/Bam_beta: only the regions of this model.
 # ------------------------------------------------------------------------------
 magibu_meth_bin <- function() {
@@ -252,9 +262,9 @@ magibu_bam_to_beta <- function(inputs, out_dir, mf, n_cores = magibu_default_cor
     f <- inputs$path[i]
     out <- file.path(ent_dir, paste0(inputs$sample[i], ".beta.tsv"))
     message("BAM ", sum(is_bam[seq_len(i)]), "/", sum(is_bam), ": ", basename(f), " (only the regions of the model are read, ",
-            if (include_5hmc) "5mC + 5hmC" else "5mC", ")")
+            if (include_5hmc) "5mC + 5hmC summed" else "5mC and 5hmC separated", ")")
     last <- -1
-    r <- processx::run(bin, c("--entropy", "--no-entropy", "--min-cov", as.character(max(1L, as.integer(min_cov))),
+    r <- processx::run(bin, c("--entropy", "--no-entropy", "--split-5hmc", "--min-cov", as.character(max(1L, as.integer(min_cov))),
                                 if (include_5hmc) "--sum-5hmc", "-r", regions, "-t", as.character(n_cores), "-o", out, f), error_on_status = FALSE,
                        stderr_line_callback = function(l, proc) {
                          if (startsWith(l, "PROGRESS ")) {
@@ -273,7 +283,7 @@ magibu_bam_to_beta <- function(inputs, out_dir, mf, n_cores = magibu_default_cor
   inputs
 }
 
-magibu_nanopore_to_tsv <- function(inputs, tsv_dir, mf, window = 502L) {
+magibu_nanopore_to_tsv <- function(inputs, tsv_dir, mf, window = 502L, split_5hmc = FALSE) {
   nano <- inputs[inputs$kind == "nanopore", , drop = FALSE]
   if (nrow(nano) == 0) return(character(0))
   dir.create(tsv_dir, recursive = TRUE, showWarnings = FALSE)
@@ -281,7 +291,7 @@ magibu_nanopore_to_tsv <- function(inputs, tsv_dir, mf, window = 502L) {
   out <- file.path(tsv_dir, paste0(nano$sample, ".tsv"))
   for (i in seq_len(nrow(nano))) {
     message("Nanopore ", i, "/", nrow(nano), ": ", basename(nano$path[i]))
-    dt <- magibu_read_nanopore(nano$path[i])
+    dt <- magibu_read_nanopore(nano$path[i], split_5hmc)
     n_all <- nrow(dt)
     dt <- .mg_near_model(dt, model, window)
     message("  CpGs read: ", n_all, ", near the model CpGs: ", nrow(dt))
@@ -327,6 +337,18 @@ magibu_distances <- function(meta, sample_ids, knn = 5, k_majority = c(5, 7, 9, 
   wide <- data.table::dcast(long, Class ~ Sample, value.var = "MeanDist_kNN")
   data.table::setnames(long, "MeanDist_kNN", paste0("MeanDist_kNN", knn))
   list(Summary = summ, Distances = long, MeanDist_wide = wide)
+}
+
+# Family typicality p-value (R/core/typicality.R): columns Family_kNN5, Family_p, Typicality,
+# Plausible_families, N_plausible added to the Summary (after the coverage), all p-values in dist$Typicality.
+# p <= 0.05 = the sample is farther from its family than almost all members (alarm, not a diagnosis).
+magibu_add_typicality <- function(dist, meta, samples) {
+  typ <- compute_typicality(magibu_standard_meta(meta), samples)
+  dist$Summary <- merge(dist$Summary, typ$summary, by = "Sample", all.x = TRUE, sort = FALSE)
+  first <- intersect(c("Sample", "Model_CpG_coverage_pct", names(typ$summary)), names(dist$Summary))
+  data.table::setcolorder(dist$Summary, first)
+  dist$Typicality <- typ$all_p
+  dist
 }
 
 # ------------------------------------------------------------------------------
@@ -391,8 +413,11 @@ magibu_write_outputs <- function(res, pdf = TRUE) {
   d <- res$distances
   wide <- data.table::copy(d$MeanDist_wide)
   data.table::setnames(wide, res$samples, unname(nm[res$samples]), skip_absent = TRUE)
-  writexl::write_xlsx(list(Summary = .mg_with_names(d$Summary, nm), Distances = .mg_with_names(d$Distances, nm),
-                           MeanDist_wide = wide), res$files$xlsx)
+  sheets <- list(Summary = .mg_with_names(d$Summary, nm), Distances = .mg_with_names(d$Distances, nm),
+                 MeanDist_wide = wide)
+  # results made with 0.8.0 or later also have the family typicality p-values
+  if (!is.null(d$Typicality)) sheets$Typicality <- .mg_with_names(d$Typicality, nm)
+  writexl::write_xlsx(sheets, res$files$xlsx)
   if (pdf) {
     message("Classic plot (UMAP + bar plot)...")
     magibu_classic_pdf(res$metadata, res$samples, nm, res$files$pdf)
@@ -451,7 +476,7 @@ magibu_run_prediction <- function(paths, model_dir, out_dir, name = "magibu", ar
   tsv_dir <- file.path(out_dir, "Tsv")
   tsv_new <- magibu_idat_to_tsv(inputs, out_dir, tsv_dir, array_type, n_cores)
   inputs <- magibu_bam_to_beta(inputs, out_dir, mf, n_cores, min_cov, include_5hmc)
-  tsv_nano <- magibu_nanopore_to_tsv(inputs, tsv_dir, mf)
+  tsv_nano <- magibu_nanopore_to_tsv(inputs, tsv_dir, mf, split_5hmc = !include_5hmc)
   tsv_all <- c(tsv_new, tsv_nano, inputs$path[inputs$kind == "tsv"])
 
   meta_train <- magibu_read_model_meta(model_dir)
@@ -468,6 +493,8 @@ magibu_run_prediction <- function(paths, model_dir, out_dir, name = "magibu", ar
   dist <- magibu_distances(meta, samples, knn = knn)
   dist$Summary[, Model_CpG_coverage_pct := unname(cover[Sample])]
   data.table::setcolorder(dist$Summary, c("Sample", "Model_CpG_coverage_pct"))
+  message("Computing family typicality...")
+  dist <- magibu_add_typicality(dist, meta, samples)
   res <- list(version = MAGIBU_VERSION, name = name, model_dir = model_dir, out_dir = out_dir, date = Sys.time(),
               seed = seed, metadata = meta, samples = samples, distances = dist,
               labels = magibu_clean_labels(labels, samples),

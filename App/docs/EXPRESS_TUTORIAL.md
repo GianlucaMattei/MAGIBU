@@ -44,6 +44,9 @@ For every option, see the [full tutorial](TUTORIAL.md). **Research use only.**
 > - Nanopore: the `.bam` file, with its `.bai` file in the same folder.
 >
 > Arrays and nanopore files can be analysed together.
+>
+> **Nanopore, 5mC and 5hmC:** by default 5mC and 5hmC are kept separate and only 5mC is used. To add them up (as in
+> older analyses) choose **5mC + 5hmC summed** under *Methylation* in the left panel. See the [full tutorial](TUTORIAL.md).
 
 ---
 
@@ -71,14 +74,19 @@ Scroll down the left panel.
 
 **2.** **Name**: the sample.
 
-**3.** **NN1_Class**: the class closest to the sample. **This is the result.**
+**3.** Scroll the table to the right to the **Group1_Class** column: the closest class, that is the class whose
+5 closest reference samples are, on average, nearest to your sample. **This is the result.**
 
-**4.** **NN1_Dist**: how close it is. **Smaller = more similar.**
+**4.** **Group1_MeanDist**: that average distance. **Smaller = more similar.** Compare it with
+**Group2_MeanDist**: when the two are close, the sample lies between two classes.
 
 **5.** **Download distances (Excel)**: saves the table.
 
-> **Tip:** scroll the table to the right for more columns:
-> - the 2nd and 3rd closest classes;
+> **The other columns are checks, not the result:**
+> - **NN1_Class** / **NN1_Dist**: the single reference sample closest to yours. One sample can be misleading: use
+>   it only to confirm Group1;
+> - **kNN5_Class** / **kNN5_Purity**: the most common class among the 5 closest reference samples, and the share of
+>   them that belong to it (1 = all 5). A purity below 1 means mixed neighbours;
 > - **Model_CpG_coverage_pct**: if it is below 50%, a yellow warning appears and the result is not reliable.
 
 ---
@@ -100,13 +108,16 @@ Scroll down the left panel.
 **A · Local Neighborhood.** Your sample is the orange dot with a black border (*Target Sample*). Around it are the closest reference
 samples, coloured by class. If the nearby dots are all the same colour, the sample clearly belongs to that class.
 
-**B · Closest Groups.** The closest classes, from top to bottom:
+**B · Closest Groups.** The closest classes, from top to bottom. The top bar is **Group1_Class** of the Summary:
 - **grey bar**: average distance from the 5 closest samples of the class. **Shorter bar = more similar**;
 - **coloured dots**: the single samples of that class;
 - **n**: how many samples the class has.
 
 > **In this example:** the first class (ETMR) has a very short bar, the next ones are much longer. The result is
 > clear. When the first two bars are similar, the sample lies between two classes.
+
+> **Distances are relative.** They are measured on the map and are not probabilities: there is no fixed cut-off
+> that makes a result right or wrong. Read them by comparing the first class with the next ones.
 
 ---
 

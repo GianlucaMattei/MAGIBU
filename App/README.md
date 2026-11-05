@@ -34,7 +34,7 @@ Interface languages: English, German, French, Spanish, Italian, Chinese (flags a
 |---|---|
 | Illumina idat (`*_Grn.idat` / `*_Red.idat`, also `.gz`) | EPIC v2, EPIC v1, 450k (array type detected or chosen) |
 | Nanopore BAM | aligned to hg38, with MM/ML methylation tags (e.g. dorado 5mC or 5mC+5hmC), coordinate sorted, with the `.bai` index next to it |
-| Entropy tsv (`*_sorted.entropy.file.tsv`) | output of `magibu-meth --entropy` or of modkit extract + ModkitResorter.sh (PoreMeth2); beta = column 5 |
+| Entropy tsv (`*_sorted.entropy.file.tsv`) | output of `magibu-meth` or of modkit extract + ModkitResorter.sh (PoreMeth2); beta = column 5, or column 7 (`beta_5mC`) with "5mC and 5hmC separated" and a file made with `magibu-meth --split-5hmc` |
 | Magibu tsv | columns `Probe_ID`, `Beta`, `chr_hg38`, `pos_hg38` |
 
 ### Nanopore BAM
@@ -46,13 +46,20 @@ No reference FASTA is needed: CpG sites are taken from the reads (CG in at least
 Each read-level call is classified with the rules of the original Magibu nanopore workflow (ParseModkit.pl of
 PoreMeth2), with p = (ML + 0.5) / 256:
 
-| Option "Methylation" | Methylated | Unmethylated | Otherwise |
-|---|---|---|---|
-| 5mC only (default) | p5mC > 0.85 | p5mC + p5hmC < 0.3 | discarded |
-| 5mC + 5hmC | p5mC + p5hmC > 0.85 | p5mC + p5hmC < 0.3 | discarded |
+5mC and 5hmC are always read separately and both are kept in `<output>/Bam_beta/` (columns `beta_5mC`,
+`beta_5hmC`, `n`). The option "Methylation" chooses which beta is used for the classification:
 
-beta = methylated / (methylated + unmethylated), kept for CpGs with at least "Minimum coverage per CpG" calls
-(default 1). With BAM files that carry only 5mC calls the two options give the same result.
+| Option "Methylation" | Beta used | Rule |
+|---|---|---|
+| 5mC and 5hmC separated (default) | `beta_5mC` = n5mC / (n5mC + n5hmC + nC) | 5mC if p5mC > 0.85, 5hmC if p5hmC > 0.85, unmodified C if p5mC + p5hmC < 0.3, otherwise discarded |
+| 5mC + 5hmC summed | methylated / (methylated + unmethylated) | methylated if p5mC + p5hmC > 0.85, unmethylated if p5mC + p5hmC < 0.3, otherwise discarded |
+
+"Summed" matches experiments analysed with the 5mC + 5hmC sum. A CpG is kept with at least "Minimum coverage per
+CpG" confident calls (default 1). With BAM files that carry only 5mC calls (`beta_5hmC` = NA) the two options give
+almost the same result. Up to version 0.7 the default was "5mC only" (5hmC calls discarded): results of the two
+versions can differ slightly.
+
+The app computes beta only, not the entropy: for the entropy use `magibu-meth` on the command line (below).
 
 The Summary reports `Model_CpG_coverage_pct`, the share of model CpGs measured in the sample (exact position or a
 CpG within 500 bp). Below 50% the row is flagged: short runs (e.g. a few minutes of sequencing) do not cover enough
@@ -64,10 +71,14 @@ The same program can be used on its own (Linux binary in `app/bin/linux-x64/`, W
 
 ```bash
 # whole genome entropy file for PoreMeth2 (replaces modkit extract full + ModkitResorter.sh)
-magibu-meth --entropy --ref hg38.fasta -t 16 -o sample_sorted.entropy.file.tsv sample.bam
+magibu-meth --ref hg38.fasta -t 16 -o sample_sorted.entropy.file.tsv sample.bam
+# entropy, with 5mC and 5hmC also kept apart (columns 7-9)
+magibu-meth --ref hg38.fasta -t 16 --split-5hmc -o sample_sorted.entropy.file.tsv sample.bam
 # beta only, in some regions, 5mC + 5hmC counted as methylation
-magibu-meth --entropy --no-entropy --sum-5hmc --min-cov 1 -r regions.bed -t 8 -o sample.beta.tsv sample.bam
+magibu-meth --no-entropy --sum-5hmc --min-cov 1 -r regions.bed -t 8 -o sample.beta.tsv sample.bam
 ```
+
+On Windows use `magibu-meth.exe` with the same options.
 
 | Option | Meaning |
 |---|---|
@@ -76,11 +87,13 @@ magibu-meth --entropy --no-entropy --sum-5hmc --min-cov 1 -r regions.bed -t 8 -o
 | `-t N` | threads (one chromosome per thread) |
 | `--no-entropy` | beta only (entropy columns NA), no 3-CpG window |
 | `--min-cov N` | minimum confident calls per CpG (default 3) |
-| `--sum-5hmc` | methylated if p5mC + p5hmC > 0.85 |
+| `--sum-5hmc` | column 5: methylated if p5mC + p5hmC > 0.85 (default: p5mC > 0.85) |
+| `--split-5hmc` | adds `beta_5mC`, `beta_5hmC`, `n` (columns 7-9); columns 1-6 unchanged |
 | `--full-precision` | full precision numbers (default: 4 decimals) |
 
 Output: tab separated, no header: chromosome, 0-based position of the C of the CpG (strands combined), entropy,
-reads with the 3-CpG pattern, beta, coverage. On a 30x whole-genome BAM (134 GB) the entropy file was identical,
+reads with the 3-CpG pattern, beta, coverage; with `--split-5hmc` also `beta_5mC`, `beta_5hmC` (NA if the BAM has
+no 5hmC calls) and `n` = n5mC + n5hmC + nC. On a 30x whole-genome BAM (134 GB) the entropy file was identical,
 row by row, to the one of modkit extract + ModkitResorter.sh, in 6.5 minutes with 16 threads.
 
 ## Reproducibility
@@ -120,4 +133,4 @@ Needs R (4.2 or later) with the packages in `build/packages.R`.
 
 Third party software and licences: `build/THIRD_PARTY_LICENSES.txt` (R, Electron, R packages) and
 `app/bin/LICENSES_magibu-meth.txt` (htslib, zlib, winpthreads). The `capper_v2` model is derived from the DNA
-methylation reference cohort of Capper et al., Nature 2018 (GEO GSE90496). Research use only.
+methylation reference cohort of Capper et al., Nature 2018 (GEO GSE90496 and GSE109379). Research use only.
