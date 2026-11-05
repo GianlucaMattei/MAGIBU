@@ -96,7 +96,7 @@ process_methylation_data(
 )
 ```
 
-### Step 10-B: Process New Sample Nanopore BAM Files
+### Step 1-B: Process New Sample Nanopore BAM Files
 
 Nanopore BAM files (aligned to hg38, with MM/ML methylation tags, sorted and indexed) can be converted
 into the TSV files used by `project_new_samples` in two equivalent ways.
