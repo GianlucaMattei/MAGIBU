@@ -1,12 +1,12 @@
 ![Logo di MAGIBU](Logo.png)
-# MaGiBu
+# MAGIBU
 
-**MaGiBu** (Methylation-based Guided Builder) is a modular R framework for building methylation-based classification models. It is platform-agnostic, supporting both Illumina methylation arrays (450K, EPIC, EPICv2) and Oxford Nanopore sequencing data.
+**MAGIBU** (Methylation-based Guided Builder) is a modular R framework for building methylation-based classification models. It is platform-agnostic, supporting both Illumina methylation arrays (450K, EPIC, EPICv2) and Oxford Nanopore sequencing data.
 
-## Magibu App for Windows
+## MAGIBU App for Windows
 
 <p align="center">
-  <a href="https://github.com/GianlucaMattei/MAGIBU/releases/download/v0.8.0-app/Magibu-0.8.0-win.zip"><img alt="Download for Windows" height="64" src="https://img.shields.io/badge/DOWNLOAD%20FOR%20WINDOWS-v0.8.0-d73a49?style=for-the-badge"></a>
+  <a href="https://github.com/GianlucaMattei/MAGIBU/releases/download/v0.8.0-app/MAGIBU-0.8.0-win.zip"><img alt="Download for Windows" height="64" src="https://img.shields.io/badge/DOWNLOAD%20FOR%20WINDOWS-v0.8.0-d73a49?style=for-the-badge"></a>
 </p>
 
 <p align="center">
@@ -15,9 +15,9 @@
   <a href="App/docs/TUTORIAL.md"><img alt="Full tutorial" height="56" src="https://img.shields.io/badge/FULL%20TUTORIAL-all%20options-1f6f7c?style=for-the-badge"></a>
 </p>
 
-<p align="center">Download, unzip and double click <b>Magibu.exe</b> (no installation needed) &nbsp;|&nbsp; <b><a href="App/docs/EXPRESS_TUTORIAL.md">Express tutorial</a></b>: classify samples in 6 steps &nbsp;|&nbsp; <b><a href="App/docs/TUTORIAL.md">Full tutorial</a></b>: every option &nbsp;|&nbsp; <a href="https://github.com/GianlucaMattei/MAGIBU/releases">All versions</a></p>
+<p align="center">Download, unzip and double click <b>MAGIBU.exe</b> (no installation needed) &nbsp;|&nbsp; <b><a href="App/docs/EXPRESS_TUTORIAL.md">Express tutorial</a></b>: classify samples in 6 steps &nbsp;|&nbsp; <b><a href="App/docs/TUTORIAL.md">Full tutorial</a></b>: every option &nbsp;|&nbsp; <a href="https://github.com/GianlucaMattei/MAGIBU/releases">All versions</a></p>
 
-The Magibu App is a Windows program with a graphical interface: Illumina arrays and nanopore BAM files are classified
+The MAGIBU App is a Windows program with a graphical interface: Illumina arrays and nanopore BAM files are classified
 with a few clicks. Details in [App/README.md](App/README.md).
 
 The rest of this page describes the R functions.
@@ -26,7 +26,7 @@ The rest of this page describes the R functions.
 
 This tutorial covers:
 
-0. **How to install MaGiBu.** Spoiler: you don't need  
+0. **How to install MAGIBU.** Spoiler: you don't need  
 1. **Building a reference model** from a training dataset
 2. **Projecting new samples** onto the reference model for classification
 
@@ -101,14 +101,14 @@ process_methylation_data(
 Nanopore BAM files (aligned to hg38, with MM/ML methylation tags, sorted and indexed) can be converted
 into the TSV files used by `project_new_samples` in two equivalent ways.
 
-**Option 1 - magibu-meth (faster).** `magibu-meth` (C, htslib; binary in `App/app/bin/`) reads the
+**Option 1 - MAGIBU-meth (faster).** `MAGIBU-meth` (C, htslib; binary in `App/app/bin/`) reads the
 methylation tags directly from the BAM and writes the same entropy file as modkit + ModkitResorter.sh
 (identical row by row on a 30x whole-genome BAM, in 6.5 minutes with 16 threads):
 
 ```
 REF=hg38.fasta # your fasta reference. It must match the one used for the BAM alignment.
 THN=16
-magibu-meth --ref ${REF} -t ${THN} -o sample_sorted.entropy.file.tsv dorado.output.bam
+MAGIBU-meth --ref ${REF} -t ${THN} -o sample_sorted.entropy.file.tsv dorado.output.bam
 mv sample_sorted.entropy.file.tsv /path/to/tsv/new_samples
 ```
 
@@ -126,7 +126,7 @@ Output: one row per CpG, tab separated, no header.
 A call is methylated if p5mC > 0.85 and unmethylated if p5mC + p5hmC < 0.3; the others are discarded
 (same rules as ParseModkit.pl of PoreMeth2).
 
-**5mC and 5hmC.** With a BAM basecalled with a dorado `5mC_5hmC` model, magibu-meth can keep the two
+**5mC and 5hmC.** With a BAM basecalled with a dorado `5mC_5hmC` model, MAGIBU-meth can keep the two
 modifications apart or add them up:
 
 | Option | Column 5 (beta) | Extra columns |
@@ -143,7 +143,7 @@ reads column 5. `beta_5hmC` is `NA` when the BAM has no 5hmC calls (5mC-only bas
 
 ```
 # entropy + 5mC and 5hmC kept apart, in one run
-magibu-meth --ref ${REF} -t ${THN} --split-5hmc -o sample_sorted.entropy.file.tsv dorado.output.bam
+MAGIBU-meth --ref ${REF} -t ${THN} --split-5hmc -o sample_sorted.entropy.file.tsv dorado.output.bam
 ```
 
 Then choose which beta goes into the classification in Step 1-B (`nanopore.settings`):
@@ -231,6 +231,6 @@ This function returns the three nearest reference classes for each sample, along
 
 ## Citation
 
-If you use MaGiBu in your research, please cite:
+If you use MAGIBU in your research, please cite:
 
 Mattei G, Giunti L, Scagnet M, Agushi R, Mussa F, Caporalini C, Sardi I, Civale VY, Magi A, Genitori L, Buccoliero AM. A MAGIBU-based model for pediatric and juvenile CNS tumors: an in-house epigenetic decision-support framework compared with online DNA methylation classifiers. Free Neuropathol. 2026 Aug 24;7:21. doi: 10.17879/freeneuropathology-2026-9648. PMID: 42683363; PMCID: PMC13532279.
